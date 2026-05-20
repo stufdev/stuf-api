@@ -1,5 +1,7 @@
 # API-Football — Guía de Lógica de Flujo
 
+> Manual operativo actualizado: ver `api-football-operaciones.md` para la estrategia de ingesta, coverage, catalogos y ahorro de cuota aterrizados en el codigo del repo.
+
 > Complemento del documento `api-football-docs.md`. Orientado a uso práctico en Python/JS.
 
 ---
