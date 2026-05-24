@@ -11,7 +11,7 @@ from pipeline_core import (
     create_supabase_client,
     league_supports,
     load_settings,
-    parse_target_leagues,
+    resolve_target_leagues,
     sync_reference_catalogs,
     utcnow,
 )
@@ -50,8 +50,8 @@ async def main() -> None:
     repository = StufRepository(supabase, LOGGER)
     ensure_market_definitions(repository)
 
-    target_leagues = parse_target_leagues(args.leagues) if args.leagues else settings.target_leagues
     season = args.season
+    target_leagues = resolve_target_leagues(args, settings, repository, season=season)
     include_players = not args.skip_players
     include_predictions = not args.skip_predictions
 

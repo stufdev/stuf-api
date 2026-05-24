@@ -1,40 +1,76 @@
-# API-Football v3.9.3
+# API-Football - Manual Canonico de STUF
 
-**Base URL:** `https://v3.football.api-sports.io/`  
-**Dashboard:** https://dashboard.api-football.com  
-**Sitio:** https://www.api-football.com
+Estado: alineado al codigo del repo
+Fecha de actualizacion: 2026-05-20
 
----
+Este archivo es la unica fuente de verdad en `stuf-api` para:
 
-## Autenticación
+- fundamentos de la API oficial
+- flujo logico de consulta
+- reglas de cuota y cache
+- mapeo a tablas y scripts del repo
+- recetas operativas de bootstrap, gap fill y jobs recurrentes
 
-Solo peticiones **GET**. Único header permitido:
+## 1. Alcance
 
+Este manual no intenta copiar toda la documentacion publica de API-Football. Resume solo lo que STUF usa o debe usar.
+
+Cobertura del manual:
+
+- descubrimiento de catalogos
+- fixtures y sub-endpoints costosos
+- players, injuries, predictions y odds
+- estrategia de persistencia en Supabase
+- operacion real del pipeline del repo
+
+## 2. Fundamentos de la API
+
+Base URL:
+
+```txt
+https://v3.football.api-sports.io/
 ```
+
+Dashboard:
+
+- [API-Football Dashboard](https://dashboard.api-football.com)
+- [API-Football](https://www.api-football.com)
+
+Autenticacion:
+
+- todos los endpoints son `GET`
+- el unico header requerido es:
+
+```txt
 x-apisports-key: TU_API_KEY
 ```
 
-> Frameworks como NodeJS pueden agregar headers extra automáticamente — elimínalos para evitar errores.
+Notas:
 
-### Headers de respuesta
-| Header | Descripción |
+- algunos clientes agregan headers extra; si la API protesta, reducirlos al minimo
+- `/status` no consume cuota diaria
+- logos e imagenes no consumen cuota diaria, pero si tienen rate limit
+
+### 2.1 Headers relevantes de respuesta
+
+| Header | Significado |
 |---|---|
-| `x-ratelimit-requests-limit` | Requests permitidos por día |
-| `x-ratelimit-requests-remaining` | Requests restantes del día |
-| `X-RateLimit-Limit` | Máx. llamadas por minuto |
-| `X-RateLimit-Remaining` | Llamadas restantes del minuto |
+| `x-ratelimit-requests-limit` | limite diario |
+| `x-ratelimit-requests-remaining` | remanente diario |
+| `X-RateLimit-Limit` | limite por minuto |
+| `X-RateLimit-Remaining` | remanente del minuto |
 
-**Rate limit:** Si excedes el límite por minuto, tu acceso puede bloquearse temporal o permanentemente.
+### 2.2 Codigos de respuesta
 
-### Códigos de respuesta
-| Código | Descripción |
+| Codigo | Significado |
 |---|---|
-| 200 | OK |
-| 204 | Sin contenido (parámetros válidos pero sin datos) |
-| 499 | Timeout |
-| 500 | Error interno del servidor |
+| `200` | OK |
+| `204` | parametros validos pero sin datos |
+| `499` | timeout |
+| `500` | error interno |
 
-### Estructura de respuesta
+### 2.3 Forma canonica de respuesta
+
 ```json
 {
   "get": "endpoint_name",
@@ -42,855 +78,515 @@ x-apisports-key: TU_API_KEY
   "errors": [],
   "results": 1,
   "paging": { "current": 1, "total": 1 },
-  "response": [...]
+  "response": []
 }
 ```
 
----
+## 3. Flujo logico de consulta
 
-## Endpoint: Status / Cuenta
+Orden recomendado de descubrimiento:
 
-```
-GET /status
-```
-No cuenta contra la cuota diaria.
-
-```python
-import requests
-url = "https://v3.football.api-sports.io/status"
-headers = {"x-apisports-key": "TU_API_KEY"}
-r = requests.get(url, headers=headers)
-print(r.json())
-```
-
-```js
-fetch("https://v3.football.api-sports.io/status", {
-  method: "GET",
-  headers: { "x-apisports-key": "TU_API_KEY" }
-}).then(r => r.json()).then(console.log)
+```txt
+/timezone
+  -> /countries
+  -> /leagues
+  -> /leagues/seasons
+  -> /teams, /standings, /fixtures/rounds
+  -> /fixtures
+  -> /fixtures/statistics, /fixtures/events, /fixtures/lineups, /fixtures/players
+  -> /injuries, /predictions
+  -> /odds, /odds/bookmakers, /odds/bets
 ```
 
-**Respuesta incluye:** `account` (nombre, email), `subscription` (plan, activa, vence), `requests` (current, limit_day).
+Flujos minimos utiles:
 
----
+- resultados: `/leagues -> /fixtures?live=all -> /fixtures/events + /fixtures/statistics`
+- prediccion: `/leagues -> /fixtures?next=10 -> /predictions?fixture=... + /odds?fixture=...`
+- perfil de jugador: `/players/profiles -> /players -> /trophies + /transfers + /sidelined`
 
-## Logos / Imágenes
+## 4. IDs que STUF debe persistir
 
-Las llamadas a logos **no cuentan** contra la cuota diaria, pero están sujetas a rate limit por segundo/minuto. Se recomienda cachear localmente o usar un CDN (BunnyCDN).
-
-- Logo de liga: `https://media.api-sports.io/football/leagues/{league_id}.png`
-- Logo de equipo: `https://media.api-sports.io/football/teams/{team_id}.png`
-- Foto de coach: `https://media.api-sports.io/football/coachs/{coach_id}.png`
-- Bandera de país: `https://media.api-sports.io/flags/{country_code}.svg`
-
----
-
-## Arquitectura de datos
-
-```
-Seasons ──────────────────── Countries
-              │
-           Leagues
-    ┌─────────┼───────────────────────────────┐
-   H2H    Fixtures   Live  Odds  Standings  Venues  Top Scorers  Players  Teams
-    │         │        │     │                                     │        │
-Predictions Events  Live    Pre-match                          Stats    Seasons
- Injuries  Lineups  Odds     Odds                             Squads  Countries
-           Stats            Bets                             Profiles  Stats
-                         Bookmakers                          Transfers Trophies
-                                                             Sidelined  Coaches
-```
-
----
-
-## Sample scripts
-
-### Python (`requests`)
-```python
-import requests
-
-url = "https://v3.football.api-sports.io/leagues"
-headers = {"x-apisports-key": "TU_API_KEY"}
-payload = {}
-
-response = requests.get(url, headers=headers, data=payload)
-print(response.text)
-```
-
-### JavaScript (Fetch)
-```js
-const myHeaders = new Headers()
-myHeaders.append("x-apisports-key", "TU_API_KEY")
-
-fetch("https://v3.football.api-sports.io/leagues", {
-  method: "GET",
-  headers: myHeaders,
-  redirect: "follow"
-})
-.then(r => r.text())
-.then(console.log)
-.catch(e => console.log("error", e))
-```
-
-### Node.js (Axios)
-```js
-const axios = require("axios")
-
-axios({
-  method: "get",
-  url: "https://v3.football.api-sports.io/leagues",
-  headers: { "x-apisports-key": "TU_API_KEY" }
-})
-.then(r => console.log(JSON.stringify(r.data)))
-.catch(console.log)
-```
-
----
-
-## Endpoints
-
-> Todos los endpoints usan `GET` y requieren el header `x-apisports-key`.  
-> `*required*` indica parámetro obligatorio.
-
----
-
-### Timezone
-```
-GET /timezone
-```
-Lista de timezones válidos para usar en `/fixtures`. Sin parámetros.  
-**Update:** estático | **Calls recomendadas:** 1 cuando se necesite.
-
----
-
-### Countries
-```
-GET /countries
-```
-Lista de países disponibles para el endpoint `/leagues`.
-
-| Parámetro | Tipo | Descripción |
+| ID | Origen | Uso |
 |---|---|---|
-| `name` | string | Nombre del país |
-| `code` | string [2–6 chars] | Código alpha (FR, GB…) |
-| `search` | string [≥3 chars] | Búsqueda por nombre |
+| `league_id` | `/leagues` | fixtures, standings, players, odds |
+| `season` | `/leagues`, `/leagues/seasons` | clave de coverage y agregados |
+| `team_id` | `/teams` | fixtures, stats, players, injuries |
+| `fixture_id` | `/fixtures` | todos los sub-endpoints de partido |
+| `player_id` | `/players` | stats, profiles, trophies, transfers |
+| `venue_id` | `/venues` | contexto de estadio |
+| `bookmaker_id` | `/odds/bookmakers` | odds pre-match |
+| `bet_id` | `/odds/bets` | mercados pre-match |
+| `live_bet_id` | `/odds/live/bets` | mercados live |
 
-**Update:** al agregar nuevas ligas | **Calls recomendadas:** 1/día.
+Notas clave:
 
-```python
-# Ejemplos
-requests.get(url + "countries", headers=h)
-requests.get(url + "countries?name=england", headers=h)
-requests.get(url + "countries?code=fr", headers=h)
-requests.get(url + "countries?search=engl", headers=h)
-```
+- `league_id` es estable entre temporadas
+- `fixture_id` es unico y no cambia
+- las temporadas se representan como `YYYY`
+- `/players` pagina a 250
+- `/odds` pagina a 10
+- `/odds/mapping` pagina a 100
+- `odds/live` no guarda historial; desaparece poco despues del fin del partido
+- `odds/live/bets` y `odds/bets` no comparten IDs
 
----
+## 5. Mapa de endpoints que importan a STUF
 
-### Leagues / Seasons
-```
-GET /leagues
-GET /leagues/seasons
-```
+### 5.1 Descubrimiento y catalogos
 
-**`/leagues`** — Lista de ligas y copas disponibles. El `id` de liga es único y persiste entre temporadas.
+| Endpoint | Parametros clave | Update oficial | Uso en STUF |
+|---|---|---|---|
+| `/status` | ninguno | sin cuota | health check y control de cuota |
+| `/timezone` | ninguno | estatico | soporte de fechas si hace falta |
+| `/countries` | `name`, `code`, `search` | muy poco frecuente | catalogo de paises |
+| `/leagues` | `id`, `country`, `season`, `team`, `type`, `current`, `search` | al agregar ligas | catalogo canonico de competiciones y coverage |
+| `/leagues/seasons` | ninguno | poco frecuente | validacion de temporadas |
+| `/venues` | `id`, `name`, `city`, `country`, `search` | muy poco frecuente | catalogo de estadios |
 
-| Parámetro | Tipo | Descripción |
+Punto importante:
+
+- STUF resuelve la cobertura real por `league_id + season` desde `/leagues` y la persiste en `league_coverage`
+
+### 5.2 Contexto de competicion y equipo
+
+| Endpoint | Parametros clave | Update oficial | Uso en STUF |
+|---|---|---|---|
+| `/teams` | `id`, `league`, `season`, `country`, `venue`, `search` | diario | catalogo de equipos |
+| `/teams/statistics` | `league`, `season`, `team`, `date` | diario | referencia externa; STUF prefiere agregados propios |
+| `/teams/seasons` | `team` | diario | temporadas por equipo |
+| `/teams/countries` | ninguno | bajo cambio | catalogo auxiliar |
+| `/standings` | `season` y `league` o `team` | diario | tabla de posiciones |
+| `/fixtures/rounds` | `league`, `season`, `current`, `dates` | diario | jornadas |
+
+### 5.3 Fixtures y detalle de partido
+
+Estados de fixture que STUF usa:
+
+| Grupo | Codes |
+|---|---|
+| Upcoming | `NS`, `TBD` |
+| In Play | `1H`, `HT`, `2H`, `ET`, `BT`, `P`, `SUSP`, `INT`, `LIVE` |
+| Final | `FT`, `AET`, `PEN` |
+| No jugado / invalido para analitica | `PST`, `CANC`, `ABD`, `AWD`, `WO` |
+
+| Endpoint | Parametros clave | Update oficial | Uso en STUF |
+|---|---|---|---|
+| `/fixtures` | `id`, `ids`, `live`, `date`, `league`, `season`, `team`, `last`, `next`, `from`, `to`, `status` | cada 15s en vivo | shell de fixtures, historico, upcoming, cierre nocturno |
+| `/fixtures/headtohead` | `h2h`, `last`, `next`, `from`, `to` | frecuente | contexto H2H si se necesita |
+| `/fixtures/statistics` | `fixture`, `team`, `type`, `half` | cada 15s en vivo | stats FT; con `half=true` la API mantiene `statistics` como FT y agrega `statistics_1h` / `statistics_2h` por equipo |
+| `/fixtures/events` | `fixture`, `team`, `player`, `type` | cada 15s en vivo | goles, tarjetas, cambios, VAR |
+| `/fixtures/lineups` | `fixture`, `team`, `player` | cada 15 min | formacion y once inicial |
+| `/fixtures/players` | `fixture`, `team` | cada 1 min | player fixture stats |
+| `/injuries` | `league`, `season`, `fixture`, `team`, `player`, `date` | diario | bajas y disponibilidad |
+| `/predictions` | `fixture` | cada hora | prediccion previa al partido |
+
+Notas de negocio:
+
+- `fixtures/statistics?half=true` no reemplaza `statistics`; agrega `statistics_1h` y `statistics_2h` dentro de cada equipo
+- `fixtures/events` es la base de booking points, first goals y cortes por tiempo
+- `fixtures/players` es costoso; solo debe abrirse donde coverage lo justifica
+- `predictions` no viene embebido en `fixtures`; cada fixture requiere su propia llamada
+
+### 5.4 Players, coaches y rosters
+
+| Endpoint | Parametros clave | Update oficial | Uso en STUF |
+|---|---|---|---|
+| `/coachs` | `id`, `team`, `search` | diario | catalogo auxiliar de entrenadores |
+| `/players/seasons` | `player` | diario | temporadas disponibles |
+| `/players` | `season` + `id` o `league` o `team`; `page` | diario | stats de jugador por temporada |
+| `/players/profiles` | `player` o `search`; `page` | diario | perfil sin stats |
+| `/players/squads` | `team` o `player` | varias veces por semana | plantillas |
+| `/players/teams` | `player` | varias veces por semana | historial de equipos |
+| `/players/topscorers` | `league`, `season` | varias veces por semana | tops |
+| `/players/topassists` | `league`, `season` | varias veces por semana | tops |
+| `/players/topyellowcards` | `league`, `season` | varias veces por semana | tops |
+| `/players/topredcards` | `league`, `season` | varias veces por semana | tops |
+| `/transfers` | `player` o `team` | varias veces por semana | historial de transferencias |
+| `/trophies` | `player` o `coach` | varias veces por semana | historial de titulos |
+| `/sidelined` | `player` | varias veces por semana | ausencias historicas |
+
+Regla importante:
+
+- en `/players`, `season` es obligatoria cuando consultas por estadisticas
+
+### 5.5 Odds
+
+| Endpoint | Parametros clave | Update oficial | Uso en STUF |
+|---|---|---|---|
+| `/odds/live` | `fixture`, `league`, `bet` | 5s a 60s | fuera del pipeline actual principal |
+| `/odds/live/bets` | ninguno | ~60s | catalogo solo para live odds |
+| `/odds` | `fixture`, `league`, `season`, `date`, `page`, `bookmaker`, `bet` | ~3h | capturas pre-match |
+| `/odds/mapping` | `page` | frecuente | fixtures con odds disponibles |
+| `/odds/bookmakers` | ninguno | varias veces por semana | catalogo oficial de bookmakers |
+| `/odds/bets` | ninguno | varias veces por semana | catalogo oficial de mercados pre-match |
+
+Notas:
+
+- STUF usa `api_reference_bookmakers` y `api_reference_bets` para no hardcodear IDs
+- odds pre-match existen normalmente entre 1 y 14 dias antes del fixture
+- `odds` tiene historial corto; por eso STUF guarda snapshots JSONB
+
+## 6. Politica de cache y ahorro de cuota
+
+| Dato | Endpoint | Cache recomendada |
 |---|---|---|
-| `id` | integer | ID de la liga |
-| `name` | string | Nombre |
-| `country` | string | País |
-| `code` | string [2–6] | Código alpha |
-| `season` | integer [4 chars] | Temporada (YYYY) |
-| `team` | integer | ID del equipo |
-| `type` | string | `"league"` o `"cup"` |
-| `current` | string | `"true"` / `"false"` — temporada activa |
-| `search` | string [≥3 chars] | Nombre o país |
-| `last` | integer [≤2 chars] | Últimas X ligas añadidas |
-
-**Update:** al agregar ligas | **Calls recomendadas:** 1/día.
-
-**`/leagues/seasons`** — Lista de todas las temporadas disponibles. Sin parámetros.
-
-```python
-requests.get(url + "leagues?id=39", headers=h)
-requests.get(url + "leagues?season=2019&country=england&type=league", headers=h)
-requests.get(url + "leagues?team=85&season=2019", headers=h)
-requests.get(url + "leagues/seasons", headers=h)
-```
+| cuota y salud | `/status` | bajo demanda |
+| timezones | `/timezone` | indefinido |
+| paises | `/countries` | 7 dias |
+| ligas y seasons | `/leagues`, `/leagues/seasons` | 24h |
+| equipos | `/teams` | 24h |
+| standings | `/standings` | 1-2h |
+| venues | `/venues` | 7 dias |
+| fixtures no live | `/fixtures` | 1h |
+| fixtures live | `/fixtures?live=all` | 15-30s |
+| fixture stats / events | `/fixtures/statistics`, `/fixtures/events` | 15-30s live, 1h post-match |
+| lineups | `/fixtures/lineups` | desde T-90, luego reintentos |
+| player fixture stats | `/fixtures/players` | 60s live, 1h post-match |
+| injuries | `/injuries` | 6h |
+| predictions | `/predictions` | 1h |
+| odds pre-match | `/odds` | 3h |
+| bookmakers / bets | `/odds/bookmakers`, `/odds/bets` | 24h |
 
----
+Errores tipicos:
 
-### Teams
-```
-GET /teams
-GET /teams/statistics
-GET /teams/seasons
-GET /teams/countries
-```
+- llamar `/countries` y `/leagues` en cada request
+- hacer polling de `/fixtures?live=all` cada segundo
+- pedir lineups horas antes del kickoff
+- usar `/players` sin `season`
+- mezclar `odds/bets` con `odds/live/bets`
 
-**`/teams`** — Información de equipos.
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `id` | integer | ID del equipo |
-| `name` | string | Nombre |
-| `league` | integer | ID de liga |
-| `season` | integer | Temporada (YYYY) |
-| `country` | string | País |
-| `code` | string | Código del equipo (3 letras) |
-| `venue` | integer | ID del estadio |
-| `search` | string [≥3] | Búsqueda por nombre o país |
-
-**`/teams/statistics`** — Estadísticas de un equipo en una liga/temporada.
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `league` | integer *required* | ID de liga |
-| `season` | integer *required* | Temporada (YYYY) |
-| `team` | integer *required* | ID del equipo |
-| `date` | string YYYY-MM-DD | Fecha límite |
-
-**`/teams/seasons`** — Temporadas disponibles para un equipo.  
-Parámetro: `team` (integer, *required*)
-
-**`/teams/countries`** — Países disponibles para el endpoint teams. Sin parámetros.
-
-**Update:** diario | **Calls recomendadas:** 1/día.
-
-```python
-requests.get(url + "teams?id=33", headers=h)
-requests.get(url + "teams?league=39&season=2019", headers=h)
-requests.get(url + "teams/statistics?league=39&team=33&season=2019", headers=h)
-requests.get(url + "teams/seasons?team=33", headers=h)
-```
+## 7. Como STUF aterriza la API en el repo
 
----
+### 7.1 Principios de arquitectura
 
-### Venues
-```
-GET /venues
-```
+- `supported_leagues` es la configuracion canonica del producto
+- `--leagues` es override manual para bootstrap o corridas puntuales
+- `TARGET_LEAGUES` queda solo como override tecnico opcional
+- antes de abrir fan-out costoso se revisa si el fixture ya esta hidratado
+- `league_coverage` manda sobre lo que vale la pena consultar
+- odds pre-match se capturan en batch por `date + bookmaker`
+- el frontend consume payloads server-side; no abre tablas analiticas al cliente publico
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `id` | integer | ID del estadio |
-| `name` | string | Nombre |
-| `city` | string | Ciudad |
-| `country` | string | País |
-| `search` | string [≥3] | Nombre, ciudad o país |
-
-**Update:** al agregar equipos | **Calls recomendadas:** 1/día.
-
-```python
-requests.get(url + "venues?id=556", headers=h)
-requests.get(url + "venues?city=manchester", headers=h)
-requests.get(url + "venues?search=trafford", headers=h)
-```
+### 7.2 Tablas base que soportan la ingesta
 
----
+| Tabla | Rol |
+|---|---|
+| `supported_leagues` | configuracion canonica de ligas soportadas |
+| `leagues` | catalogo de competiciones |
+| `league_seasons` | temporadas por liga |
+| `league_coverage` | flags oficiales por liga y temporada |
+| `teams` | catalogo de equipos |
+| `fixtures` | shell principal de fixtures |
+| `fixture_statistics` | stats FT y 1H |
+| `fixture_events` | eventos de partido |
+| `fixture_lineups` | alineaciones |
+| `player_fixture_stats` | stats por jugador en fixture |
+| `fixture_predictions_api` | respuesta de predictions |
+| `api_reference_bookmakers` | catalogo oficial de bookmakers |
+| `api_reference_bets` | catalogo oficial de mercados |
+| `fixture_odds_snapshots` | snapshots JSONB de odds |
 
-### Standings
-```
-GET /standings
-```
+### 7.3 Reglas ya aterrizadas
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `league` | integer | ID de liga |
-| `season` | integer *required* | Temporada (YYYY) |
-| `team` | integer | ID del equipo |
-
-**Update:** diario | **Calls recomendadas:** 1/día.
-
-```python
-requests.get(url + "standings?league=39&season=2019", headers=h)
-requests.get(url + "standings?league=39&team=33&season=2019", headers=h)
-```
+Booking points:
 
----
+- amarilla = 10
+- roja = 25
 
-### Fixtures / Rounds
+Integridad de periodos:
 
-```
-GET /fixtures/rounds
-GET /fixtures
-GET /fixtures/headtohead
-```
+- STUF persiste `FT`
+- si `half=true` trae `statistics_1h`, STUF persiste `1H`
+- si `half=true` trae `statistics_2h`, STUF persiste `2H`; si faltara, `2H` puede derivarse para estadisticas aditivas desde `FT - 1H`
 
-#### Fixture statuses
-
-| Short | Long | Tipo |
-|---|---|---|
-| TBD | Time To Be Defined | Not Played |
-| NS | Not Started | Not Played |
-| 1H | First Half | In Play |
-| HT | Halftime | In Play |
-| 2H | Second Half | In Play |
-| ET | Extra Time | In Play |
-| BT | Break Time | In Play |
-| P | Penalty In Progress | In Play |
-| SUSP | Match Suspended | In Play |
-| INT | Match Interrupted | In Play |
-| FT | Match Finished | Finished |
-| AET | After Extra Time | Finished |
-| PEN | Finished Penalties | Finished |
-| PST | Match Postponed | Postponed |
-| CANC | Match Cancelled | Cancelled |
-| ABD | Match Abandoned | Abandoned |
-| AWD | Technical Loss | Not Played |
-| WO | WalkOver | Not Played |
-| LIVE | In Progress | In Play |
-
-> - IDs de fixtures son únicos y nunca cambian.
-> - Datos actualizados cada **15 segundos**.
-> - No todas las competiciones tienen livescore; en ese caso `status` permanece en `NS` hasta 48h tras el partido.
-
-**`/fixtures/rounds`**
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `league` | integer *required* | ID de liga |
-| `season` | integer *required* | Temporada (YYYY) |
-| `current` | boolean | Solo la jornada actual |
-| `dates` | boolean | Incluir fechas de cada jornada |
-| `timezone` | string | Timezone válido |
-
-**`/fixtures`**
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `id` | integer | ID del fixture |
-| `ids` | string | Varios IDs: `id-id-id` (máx. 20) |
-| `live` | string | `"all"` o IDs de ligas: `"39-61"` |
-| `date` | string YYYY-MM-DD | Fecha |
-| `league` | integer | ID de liga |
-| `season` | integer | Temporada (YYYY) |
-| `team` | integer | ID del equipo |
-| `last` | integer [≤2] | Últimos X fixtures |
-| `next` | integer [≤2] | Próximos X fixtures |
-| `from` | string YYYY-MM-DD | Desde fecha |
-| `to` | string YYYY-MM-DD | Hasta fecha |
-| `round` | string | Jornada (ej. `"Regular Season - 1"`) |
-| `status` | string | Estado(s): `"NS"` o `"NS-PST-FT"` |
-| `venue` | integer | ID del estadio |
-| `timezone` | string | Timezone válido |
-
-**Update:** cada 15s | **Calls recomendadas:** 1/min si hay fixtures en curso, sino 1/día.
-
-**`/fixtures/headtohead`**
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `h2h` | string *required* | IDs de equipos: `"ID-ID"` |
-| `date` | string YYYY-MM-DD | Fecha |
-| `league` | integer | ID de liga |
-| `season` | integer | Temporada (YYYY) |
-| `last` | integer | Últimos X fixtures |
-| `next` | integer | Próximos X fixtures |
-| `from` / `to` | string | Rango de fechas |
-| `status` | string | Estado(s) |
-| `venue` | integer | ID del estadio |
-
-```python
-# Fixtures en juego
-requests.get(url + "fixtures?live=all", headers=h)
-# Fixtures de una liga/temporada
-requests.get(url + "fixtures?league=39&season=2019", headers=h)
-# Fixture por ID (incluye events, lineups, stats, players)
-requests.get(url + "fixtures?id=215662", headers=h)
-# Múltiples IDs
-requests.get(url + "fixtures?ids=215662-215663-215664", headers=h)
-# H2H
-requests.get(url + "fixtures/headtohead?h2h=33-34", headers=h)
-```
+Predictions:
 
----
+- se refrescan solo si faltan o si el kickoff esta cerca y la fila esta vieja
 
-### Fixtures: Statistics
-```
-GET /fixtures/statistics
-```
-Estadísticas de un fixture por equipo.
+## 8. Carriles operativos del pipeline
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `fixture` | integer *required* | ID del fixture |
-| `team` | integer | ID del equipo |
-| `type` | string | Tipo de estadística |
-| `half` | boolean | Incluir stats de 1er tiempo (desde 2024) |
+### 8.1 Carril A - Historico
 
-**Estadísticas disponibles:** Shots On/Off Goal, Total/Blocked Shots, Shots Inside/Outside Box, Fouls, Corner Kicks, Offsides, Ball Possession, Yellow/Red Cards, Goalkeeper Saves, Total/Accurate Passes, Passes %.
+Script principal:
 
-**Update:** cada 15s | **Calls recomendadas:** 1/min en curso, sino 1/día.
+- `fetch_historical_limited.py`
 
-```python
-requests.get(url + "fixtures/statistics?fixture=215662&team=463", headers=h)
-```
+Alias historico:
 
----
+- `bulk_historical_ingestion.py`
 
-### Fixtures: Events
-```
-GET /fixtures/events
-```
+Capacidades actuales:
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `fixture` | integer *required* | ID del fixture |
-| `team` | integer | ID del equipo |
-| `player` | integer | ID del jugador |
-| `type` | string | Tipo de evento |
-
-**Tipos de eventos:**
-- `Goal`: Normal Goal, Own Goal, Penalty, Missed Penalty
-- `Card`: Yellow Card, Red Card
-- `Subst`: Substitution [1, 2, 3…]
-- `Var`: Goal Cancelled, Penalty Confirmed (desde 2020-2021)
-
-**Update:** cada 15s | **Calls recomendadas:** 1/min en curso, sino 1/día.
-
-```python
-requests.get(url + "fixtures/events?fixture=215662", headers=h)
-requests.get(url + "fixtures/events?fixture=215662&type=card", headers=h)
-```
+- modo por `--limit` para ultimos X fixtures finales
+- modo por `--days-back` para todos los fixtures finalizados dentro de una ventana reciente
+- usa `FT`, `AET`, `PEN`
+- omite fan-out si el fixture ya esta sano
+- usa coverage real para decidir `statistics`, `events`, `players`, `predictions`
 
----
+### 8.2 Carril A2 - Cierre de brecha reciente
 
-### Fixtures: Lineups
-```
-GET /fixtures/lineups
-```
+Helper explicito:
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `fixture` | integer *required* | ID del fixture |
-| `team` | integer | ID del equipo |
-| `player` | integer | ID del jugador |
-| `type` | string | Tipo |
+- `fetch_recent_window.py`
 
-Incluye formación, titulares, suplentes y colores de camiseta. Posición en campo: eje X desde portería, eje Y de izquierda a derecha.
+Uso:
 
-**Update:** cada 15 min | **Calls recomendadas:** 1/15min en curso, sino 1/día.
+- rehidrata una ventana reciente
+- comparte la misma hidratacion de detalle que `fetch_historical_limited.py`
+- no recalcula agregados; despues van rebuilds
 
-```python
-requests.get(url + "fixtures/lineups?fixture=592872", headers=h)
-```
+Nota:
 
----
+- hoy el camino preferido es usar `fetch_historical_limited.py --days-back ...`
+- `fetch_recent_window.py` sigue siendo util como helper explicito
 
-### Fixtures: Players Statistics
-```
-GET /fixtures/players
-```
+### 8.3 Carril B - Cierre nocturno
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `fixture` | integer *required* | ID del fixture |
-| `team` | integer | ID del equipo |
+Script:
 
-**Update:** cada 1 min | **Calls recomendadas:** 1/min en curso, sino 1/día.
+- `sync_football_data.py`
 
-```python
-requests.get(url + "fixtures/players?fixture=169080", headers=h)
-```
+Funcion:
 
----
+- una llamada a `/fixtures?date=YYYY-MM-DD`
+- filtra ligas objetivo en backend
+- actualiza estados reales
+- solo hace fan-out para finales no hidratados
 
-### Injuries
-```
-GET /injuries
-```
-Jugadores no disponibles (suspendidos, lesionados). Datos desde abril 2021.
-
-Tipos: `Missing Fixture` (no jugará) / `Questionable` (dudoso).
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `league` | integer | ID de liga |
-| `season` | integer | Temporada (YYYY) |
-| `fixture` | integer | ID del fixture |
-| `ids` | string | Varios fixture IDs: `"id-id-id"` |
-| `team` | integer | ID del equipo |
-| `player` | integer | ID del jugador |
-| `date` | string YYYY-MM-DD | Fecha |
-| `timezone` | string | Timezone válido |
-
-**Update:** diario | **Calls recomendadas:** 1/día.
-
-```python
-requests.get(url + "injuries?league=2&season=2020", headers=h)
-requests.get(url + "injuries?fixture=686314", headers=h)
-requests.get(url + "injuries?team=85&season=2020", headers=h)
-requests.get(url + "injuries?date=2021-04-07", headers=h)
-```
+Horario sugerido:
 
----
+- `04:00 UTC` para procesar "ayer"
 
-### Predictions
-```
-GET /predictions
-```
-Predicciones para un fixture usando estadísticas históricas y algoritmo propio (sin odds de casas de apuestas).
+### 8.4 Carril C - Planning
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `fixture` | integer *required* | ID del fixture |
+Script:
 
-**Predicciones disponibles:**
-- `winner`: ID del equipo que puede ganar
-- `win_or_draw`: `true` si puede ganar o empatar
-- `under_over`: -1.5 / -2.5 / -3.5 / -4.5 / +1.5 / +2.5 / +3.5 / +4.5
-- `goals_home` / `goals_away`: -1.5 / -2.5 / -3.5 / -4.5
-- `advice`: consejo textual (ej. "Deportivo Santani or draws and -3.5 goals")
-- Comparativas: Strength, Attacking/Defensive potential, Poisson distribution, H2H strength/goals, Wins.
+- `fetch_upcoming_fixtures.py`
 
-> `*` → valor negativo = máximo de goals. Ej. `-1.5` = máximo 1 gol.
+Funcion:
 
-**Update:** cada hora | **Calls recomendadas:** 1/hora en curso, sino 1/día.
+- recorre proximos `N` dias
+- persiste fixtures `NS` y `TBD`
+- llama `/predictions` solo cuando hace falta
 
-```python
-requests.get(url + "predictions?fixture=198772", headers=h)
-```
+Horario sugerido:
 
----
+- `05:00 UTC`
 
-### Coachs
-```
-GET /coachs
-```
-Información y carrera de entrenadores.  
-Foto: `https://media.api-sports.io/football/coachs/{coach_id}.png`
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `id` | integer | ID del coach |
-| `team` | integer | ID del equipo |
-| `search` | string [≥3] | Búsqueda por nombre |
-
-**Update:** diario | **Calls recomendadas:** 1/día.
-
-```python
-requests.get(url + "coachs?team=85", headers=h)
-requests.get(url + "coachs?search=guardiola", headers=h)
-```
+### 8.5 Carril D - Lineups
 
----
+Script:
 
-### Players
+- `fetch_lineups_hotzone.py`
 
-#### Players Seasons
-```
-GET /players/seasons
-```
-Temporadas disponibles para estadísticas de jugadores.  
-Parámetro opcional: `player` (integer).
+Funcion:
 
-#### Players (Statistics)
-```
-GET /players
-```
+- busca fixtures en ventana caliente de 90 minutos
+- llama `/fixtures/lineups` solo si coverage lo permite y aun no hay datos
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `id` | integer | ID del jugador |
-| `team` | integer | ID del equipo |
-| `league` | integer | ID de liga |
-| `season` | integer *required* (con id/league/team) | Temporada (YYYY) |
-| `search` | string [≥4] | Nombre (requiere league o team) |
-| `page` | integer (default 1) | Paginación (250 resultados/página) |
-
-**Update:** diario | **Calls recomendadas:** 1/día.
-
-```python
-requests.get(url + "players?id=19088&season=2018", headers=h)
-requests.get(url + "players?team=85&season=2020", headers=h)
-requests.get(url + "players?league=39&season=2019&search=salah", headers=h)
-```
+Cadencia sugerida:
 
-#### Players Profiles
-```
-GET /players/profiles
-```
-Perfil de jugador sin estadísticas de temporada.
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `player` | integer | ID del jugador |
-| `search` | string | Apellido (≥3 chars) |
-| `page` | integer | Paginación |
-
-```python
-requests.get(url + "players/profiles?player=276", headers=h)
-requests.get(url + "players/profiles?search=ney", headers=h)
-```
+- `T-35`, `T-20`, `T-10`
 
-#### Players Squads
-```
-GET /players/squads
-```
-Plantilla actual de un equipo, o equipos de un jugador.
+### 8.6 Carril E - Odds pre-match
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `team` | integer | ID del equipo |
-| `player` | integer | ID del jugador |
+Script:
 
-**Update:** varias veces/semana | **Calls recomendadas:** 1/semana.
+- `fetch_pre_match_odds.py`
 
-#### Players Teams
-```
-GET /players/teams
-```
-Todos los equipos de un jugador.  
-Parámetro: `player` (integer *required*).
+Funcion:
 
-#### Top Scorers
-```
-GET /players/topscorers
-```
-Top 20 goleadores de una liga/temporada.
+- resuelve bookmaker desde catalogo
+- agrupa fixtures por fecha
+- consulta `/odds?date=...&bookmaker=...` con paginacion
+- guarda snapshots por fixture
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `league` | integer *required* | ID de liga |
-| `season` | integer *required* | Temporada (YYYY) |
+Cadencia sugerida:
 
-Criterio de desempate: 1-Goles, 2-Asistencias, 3-Partidos jugados, 4-Minutos jugados.
+- cada 3 horas
 
-#### Top Assists
-```
-GET /players/topassists
-```
-Top 20 asistentes. Mismos parámetros que topscorers.  
-Desempate: 1-Asistencias, 2-Goles, 3-Partidos, 4-Minutos.
+## 9. Recetas operativas
 
-#### Top Yellow Cards
-```
-GET /players/topyellowcards
-```
-Top 20 tarjetas amarillas. Mismos parámetros.  
-Desempate: 1-Amarillas, 2-Rojas, 3-Asistencias, 4-Menos minutos jugados.
+### 9.1 Health check
 
-#### Top Red Cards
+```powershell
+cd C:\stuf\stuf-api
+python check_api_status.py --request-delay 1.0
 ```
-GET /players/topredcards
-```
-Top 20 tarjetas rojas. Mismos parámetros.  
-Desempate: 1-Rojas, 2-Amarillas, 3-Asistencias, 4-Menos minutos.
 
-**Update:** varias veces/semana | **Calls recomendadas:** 1/día.
+Debe devolver cuenta, plan activo y cuota diaria.
 
-```python
-requests.get(url + "players/topscorers?league=39&season=2019", headers=h)
-requests.get(url + "players/topassists?league=61&season=2020", headers=h)
-```
+### 9.2 Bootstrap P0 para Comparison
 
----
+Objetivo:
 
-### Transfers
-```
-GET /transfers
-```
-Transferencias de jugadores y equipos.
+- una liga
+- una temporada
+- suficiente historico real
+- minimo gasto de cuota
 
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `player` | integer | ID del jugador |
-| `team` | integer | ID del equipo |
+Caso recomendado:
 
-**Update:** varias veces/semana | **Calls recomendadas:** 1/día.
+```powershell
+cd C:\stuf\stuf-api
 
-```python
-requests.get(url + "transfers?player=35845", headers=h)
-requests.get(url + "transfers?team=85", headers=h)
-```
+python check_api_status.py --request-delay 1.0
 
----
+python fetch_historical_limited.py --leagues 140 --season 2025 --limit 120 --skip-players --skip-predictions --request-delay 1.0
 
-### Trophies
-```
-GET /trophies
-```
-Todos los trofeos de un jugador o entrenador.
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `player` | integer | ID del jugador |
-| `coach` | integer | ID del coach |
-| `players` | string | Varios IDs: `"id-id"` |
-| `coachs` | string | Varios IDs: `"id-id"` |
-
-**Update:** varias veces/semana | **Calls recomendadas:** 1/día.
-
-```python
-requests.get(url + "trophies?player=276", headers=h)
-requests.get(url + "trophies?coach=2", headers=h)
-requests.get(url + "trophies?players=276-278-279", headers=h)
-```
+python rebuild_stat_averages.py --leagues 140 --season 2025
 
----
+python rebuild_trend_engine.py --leagues 140 --season 2025
 
-### Sidelined
-```
-GET /sidelined
-```
-Historial de ausencias por lesión/suspensión de un jugador o entrenador.
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `player` | integer | ID del jugador |
-| `coach` | integer | ID del coach |
-| `players` | string | Varios IDs: `"id-id-id"` |
-| `coachs` | string | Varios IDs: `"id-id-id"` |
-
-```python
-requests.get(url + "sidelined?player=276", headers=h)
-requests.get(url + "sidelined?players=276-278-279-280-281", headers=h)
-requests.get(url + "sidelined?coach=2", headers=h)
+python rebuild_referee_stats.py --leagues 140 --season 2025
+
+python fetch_upcoming_fixtures.py --leagues 140 --days 6 --skip-predictions --request-delay 1.0
 ```
 
----
+### 9.3 Bootstrap con Player Stats
 
-## Odds (Live)
+```powershell
+cd C:\stuf\stuf-api
 
-### odds/live
-```
-GET /odds/live
-```
-Cuotas en tiempo real para fixtures en curso.
-
-- Fixtures se añaden 5-15 min antes del inicio.
-- Fixtures se eliminan 5-20 min después de terminar.
-- **No se guarda historial.**
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `fixture` | integer | ID del fixture |
-| `league` | integer | ID de liga |
-| `bet` | integer | ID del tipo de apuesta |
-
-**Update:** cada 5s (puede variar 5–60s).
-
-**Status fields en respuesta:**
-- `stopped`: árbitro ha detenido el partido temporalmente
-- `blocked`: apuestas bloqueadas temporalmente
-- `finished`: fixture no iniciado o finalizado
-
-```python
-requests.get(url + "odds/live?fixture=721238", headers=h)
-requests.get(url + "odds/live?league=39", headers=h)
-requests.get(url + "odds/live?bet=4&fixture=164327", headers=h)
-```
+python check_api_status.py --request-delay 1.0
 
-### odds/live/bets
-```
-GET /odds/live/bets
-```
-Lista de apuestas disponibles para in-play. **No compatibles** con el endpoint `odds` (pre-match).  
-Sin parámetros. **Update:** cada 60s.
+python fetch_historical_limited.py --leagues 140 --season 2025 --limit 120 --skip-predictions --request-delay 1.0
 
----
+python rebuild_player_season_stats.py --leagues 140 --season 2025
 
-## Odds (Pre-Match)
+python rebuild_stat_averages.py --leagues 140 --season 2025
 
-### odds
-```
-GET /odds
-```
-Cuotas pre-partido. Paginación: 10 resultados/página.  
-Disponibles entre 1 y 14 días antes del partido. Historial de 7 días.
-
-| Parámetro | Tipo | Descripción |
-|---|---|---|
-| `fixture` | integer | ID del fixture |
-| `league` | integer | ID de liga |
-| `season` | integer | Temporada (YYYY) |
-| `date` | string YYYY-MM-DD | Fecha |
-| `timezone` | string | Timezone válido |
-| `page` | integer | Página (default 1) |
-| `bookmaker` | integer | ID del bookmaker |
-| `bet` | integer | ID del tipo de apuesta |
-
-**Update:** cada 3h | **Calls recomendadas:** 1/3h.
-
-```python
-requests.get(url + "odds?fixture=326090&bookmaker=6", headers=h)
-requests.get(url + "odds?league=39&season=2019&bet=4", headers=h)
-requests.get(url + "odds?date=2020-05-15&page=2&bet=4", headers=h)
-```
+python rebuild_trend_engine.py --leagues 140 --season 2025
 
-> **Campo `main`:** Se establece en `true` cuando existen múltiples valores idénticos para la misma apuesta — indica la apuesta a considerar. Si el valor es único, `main` siempre es `false` o `null`.
+python rebuild_referee_stats.py --leagues 140 --season 2025
 
-### odds/mapping
+python fetch_upcoming_fixtures.py --leagues 140 --days 6 --skip-predictions --request-delay 1.0
 ```
-GET /odds/mapping
+
+### 9.4 Tapar un hueco reciente de N dias
+
+Ejemplo: ultimos 10 dias hasta `2026-05-20`.
+
+```powershell
+cd C:\stuf\stuf-api
+
+python fetch_historical_limited.py --leagues 39,61,78,135,140 --season 2025 --days-back 10 --date 2026-05-20 --skip-predictions --request-delay 1.0
+
+python rebuild_player_season_stats.py --leagues 39,61,78,135,140 --season 2025
+
+python rebuild_stat_averages.py --leagues 39,61,78,135,140 --season 2025
+
+python rebuild_trend_engine.py --leagues 39,61,78,135,140 --season 2025
+
+python rebuild_referee_stats.py --leagues 39,61,78,135,140 --season 2025
 ```
-Lista de fixtures `id` disponibles para el endpoint `odds`. Paginación: 100 resultados/página.  
-Parámetro: `page` (integer).
+
+Si quieres limitar la cantidad dentro de la ventana:
 
-### odds/bookmakers
+```powershell
+python fetch_historical_limited.py --leagues 140 --season 2025 --days-back 10 --date 2026-05-20 --limit 30 --skip-predictions --request-delay 1.0
 ```
-GET /odds/bookmakers
+
+### 9.5 Gap fill explicito con helper
+
+```powershell
+cd C:\stuf\stuf-api
+
+python fetch_recent_window.py --leagues 140,39,61,78,135 --season 2025 --days-back 20 --skip-predictions --request-delay 1.0
+
+python rebuild_player_season_stats.py --leagues 140,39,61,78,135 --season 2025
+
+python rebuild_stat_averages.py --leagues 140,39,61,78,135 --season 2025
+
+python rebuild_trend_engine.py --leagues 140,39,61,78,135 --season 2025
+
+python rebuild_referee_stats.py --leagues 140,39,61,78,135 --season 2025
+
+python fetch_upcoming_fixtures.py --leagues 140,39,61,78,135 --days 6 --skip-predictions --request-delay 1.0
 ```
-Lista de bookmakers disponibles. Sus `id` se usan en `odds` como filtro.  
-Sin parámetros requeridos. **Update:** varias veces/semana | **Calls recomendadas:** 1/día.
+
+### 9.6 Referee stats y auditoria
 
-### odds/bets
+Rebuild:
+
+```powershell
+cd C:\stuf\stuf-api
+python rebuild_referee_stats.py --leagues 140 --season 2025
 ```
-GET /odds/bets
+
+Auditoria:
+
+```powershell
+cd C:\stuf\stuf-api
+python audit_referee_duplicates.py --leagues 140 --season 2025
 ```
-Lista de tipos de apuesta para pre-match. Sus `id` se usan en `odds`.  
-**No compatibles** con `odds/live`.  
-Sin parámetros requeridos. **Update:** varias veces/semana.
-
-```python
-requests.get(url + "odds/bookmakers", headers=h)
-requests.get(url + "odds/bets", headers=h)
+
+## 10. Variables de entorno
+
+```env
+API_SPORTS_KEY=
+SUPABASE_URL=
+SUPABASE_SERVICE_ROLE_KEY=
+PINNACLE_BOOKMAKER_NAME=Pinnacle
+# TARGET_LEAGUES=39,61,78,135,140
 ```
+
+Notas:
+
+- `TARGET_LEAGUES` no es la fuente canonica del producto
+- usar `--leagues` para ejecuciones manuales puntuales
+- la fuente canonica del producto es `supported_leagues`
+- en el estado actual de `stuf-api`, el cliente Python de Supabase valida JWT; por eso el backend usa la clave legacy `service_role` JWT, no `sb_secret_*`
+
+## 11. Checklist de despliegue
+
+1. Aplicar schema en Supabase.
+2. Si la base ya existia, aplicar `schema/002_supported_leagues.sql`.
+3. Configurar `supported_leagues`.
+4. Correr bootstrap P0 para una liga.
+5. Programar `sync_football_data.py` y `fetch_upcoming_fixtures.py`.
+6. Programar `fetch_lineups_hotzone.py` y `fetch_pre_match_odds.py`.
+7. Validar frontend contra rutas server-side.
+
+## 12. Resumen rapido de endpoints
 
----
-
-## Resumen de todos los endpoints
-
-| Endpoint | Método | Descripción |
-|---|---|---|
-| `/status` | GET | Cuenta y cuota |
-| `/timezone` | GET | Timezones válidos |
-| `/countries` | GET | Lista de países |
-| `/leagues` | GET | Ligas y copas |
-| `/leagues/seasons` | GET | Temporadas disponibles |
-| `/teams` | GET | Información de equipos |
-| `/teams/statistics` | GET | Estadísticas de equipo |
-| `/teams/seasons` | GET | Temporadas de un equipo |
-| `/teams/countries` | GET | Países disponibles en teams |
-| `/venues` | GET | Estadios |
-| `/standings` | GET | Clasificaciones |
-| `/fixtures/rounds` | GET | Jornadas de una liga |
-| `/fixtures` | GET | Partidos (livescore, histórico, próximos) |
-| `/fixtures/headtohead` | GET | H2H entre dos equipos |
-| `/fixtures/statistics` | GET | Stats de un partido |
-| `/fixtures/events` | GET | Eventos de un partido |
-| `/fixtures/lineups` | GET | Alineaciones |
-| `/fixtures/players` | GET | Stats de jugadores en partido |
-| `/injuries` | GET | Bajas por lesión/suspensión |
-| `/predictions` | GET | Predicción de partido |
-| `/coachs` | GET | Entrenadores |
-| `/players/seasons` | GET | Temporadas de jugadores |
-| `/players` | GET | Estadísticas de jugadores |
-| `/players/profiles` | GET | Perfil de jugador |
-| `/players/squads` | GET | Plantillas |
-| `/players/teams` | GET | Equipos de un jugador |
-| `/players/topscorers` | GET | Top goleadores |
-| `/players/topassists` | GET | Top asistentes |
-| `/players/topyellowcards` | GET | Top tarjetas amarillas |
-| `/players/topredcards` | GET | Top tarjetas rojas |
-| `/transfers` | GET | Transferencias |
-| `/trophies` | GET | Trofeos |
-| `/sidelined` | GET | Historial de ausencias |
-| `/odds/live` | GET | Cuotas en vivo |
-| `/odds/live/bets` | GET | Tipos de apuesta live |
-| `/odds` | GET | Cuotas pre-partido |
-| `/odds/mapping` | GET | Fixtures con odds disponibles |
-| `/odds/bookmakers` | GET | Bookmakers |
-| `/odds/bets` | GET | Tipos de apuesta pre-match |
+| Endpoint | Rol |
+|---|---|
+| `/status` | salud y cuota |
+| `/timezone` | catalogo auxiliar |
+| `/countries` | catalogo de paises |
+| `/leagues` | catalogo de ligas y coverage |
+| `/leagues/seasons` | temporadas disponibles |
+| `/teams` | catalogo de equipos |
+| `/teams/statistics` | referencia externa por equipo |
+| `/teams/seasons` | temporadas por equipo |
+| `/teams/countries` | catalogo auxiliar |
+| `/venues` | catalogo de estadios |
+| `/standings` | tabla de posiciones |
+| `/fixtures/rounds` | jornadas |
+| `/fixtures` | historico, live, futuros |
+| `/fixtures/headtohead` | H2H |
+| `/fixtures/statistics` | stats de partido |
+| `/fixtures/events` | eventos de partido |
+| `/fixtures/lineups` | alineaciones |
+| `/fixtures/players` | stats de jugadores por fixture |
+| `/injuries` | bajas |
+| `/predictions` | prediccion API |
+| `/coachs` | entrenadores |
+| `/players/seasons` | temporadas de jugador |
+| `/players` | stats de jugador |
+| `/players/profiles` | perfil |
+| `/players/squads` | plantillas |
+| `/players/teams` | historial de equipos |
+| `/players/topscorers` | top goleadores |
+| `/players/topassists` | top asistencias |
+| `/players/topyellowcards` | top amarillas |
+| `/players/topredcards` | top rojas |
+| `/transfers` | transferencias |
+| `/trophies` | trofeos |
+| `/sidelined` | ausencias historicas |
+| `/odds/live` | cuotas live |
+| `/odds/live/bets` | catalogo de mercados live |
+| `/odds` | cuotas pre-match |
+| `/odds/mapping` | fixtures con odds |
+| `/odds/bookmakers` | catalogo de bookmakers |
+| `/odds/bets` | catalogo de mercados pre-match |

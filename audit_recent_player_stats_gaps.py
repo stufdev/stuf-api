@@ -10,7 +10,7 @@ from pipeline_core import (
     configure_logging,
     create_supabase_client,
     load_settings,
-    parse_target_leagues,
+    resolve_target_leagues as resolve_pipeline_target_leagues,
     utcnow,
 )
 
@@ -45,11 +45,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_target_leagues(args: argparse.Namespace) -> tuple[int, ...]:
-    settings = load_settings()
-    if args.leagues:
-        return parse_target_leagues(args.leagues)
-    return settings.target_leagues
+def resolve_target_leagues(
+    args: argparse.Namespace,
+    settings,
+    repository: StufRepository,
+) -> tuple[int, ...]:
+    return resolve_pipeline_target_leagues(args, settings, repository, season=args.season)
 
 
 def chunked(values: list[int], size: int) -> list[list[int]]:
@@ -118,7 +119,7 @@ async def main() -> None:
     settings = load_settings()
     supabase = create_supabase_client(settings)
     repository = StufRepository(supabase, LOGGER)
-    target_leagues = resolve_target_leagues(args)
+    target_leagues = resolve_target_leagues(args, settings, repository)
     target_date = datetime.fromisoformat(args.target_date).date() if args.target_date else utcnow().date()
     recent_start = datetime.combine(target_date - timedelta(days=max(1, args.days_back) - 1), time.min)
     recent_end = datetime.combine(target_date, time.max)

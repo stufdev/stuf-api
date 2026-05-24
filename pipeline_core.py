@@ -6,12 +6,10 @@ import logging
 import math
 import os
 import hashlib
-import json
 import re
 import time
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from typing import Any, Iterable, Sequence
 
 import httpx
@@ -21,10 +19,15 @@ from supabase import Client, create_client
 load_dotenv()
 
 BASE_URL = "https://v3.football.api-sports.io"
-TARGET_LEAGUES_CONFIG_PATH = Path(__file__).resolve().parents[1] / "config" / "target-leagues.json"
 FINAL_STATUSES = {"FT", "AET", "PEN"}
 UPCOMING_STATUSES = {"NS", "TBD"}
 NON_PLAYED_STATUSES = {"PST", "CANC", "ABD", "AWD", "WO", "SUSP", "INT"}
+SUPPORTED_LEAGUE_FEATURE_COLUMNS = {
+    "comparison": "enabled_for_comparison",
+    "fixtures": "enabled_for_fixtures",
+    "pipeline": "enabled_for_pipeline",
+    "streaks": "enabled_for_streaks",
+}
 
 
 def configure_logging(name: str) -> logging.Logger:
@@ -56,50 +59,26 @@ def chunked(values: Sequence[Any], size: int) -> Iterable[Sequence[Any]]:
         yield values[index:index + size]
 
 
-def load_default_target_leagues() -> tuple[int, ...]:
-    try:
-        payload = json.loads(TARGET_LEAGUES_CONFIG_PATH.read_text(encoding="utf-8"))
-    except FileNotFoundError as exc:
-        raise RuntimeError(
-            f"Falta la configuracion compartida de ligas objetivo: {TARGET_LEAGUES_CONFIG_PATH}"
-        ) from exc
-
-    raw_values = payload.get("default_target_leagues")
-    if not isinstance(raw_values, list):
-        raise RuntimeError(
-            f"El archivo {TARGET_LEAGUES_CONFIG_PATH} debe exponer una lista 'default_target_leagues'."
-        )
-
+def dedupe_positive_ints(values: Iterable[Any]) -> tuple[int, ...]:
     parsed: list[int] = []
-    for raw_value in raw_values:
+    for raw_value in values:
         parsed_value = int(raw_value)
         if parsed_value <= 0:
             continue
         if parsed_value not in parsed:
             parsed.append(parsed_value)
-
-    if not parsed:
-        raise RuntimeError(
-            f"El archivo {TARGET_LEAGUES_CONFIG_PATH} no contiene ligas objetivo validas."
-        )
-
     return tuple(parsed)
-
-
-DEFAULT_TARGET_LEAGUES = load_default_target_leagues()
 
 
 def parse_target_leagues(raw_value: str | None) -> tuple[int, ...]:
     if not raw_value:
-        return DEFAULT_TARGET_LEAGUES
+        return ()
 
-    parsed: list[int] = []
-    for part in raw_value.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        parsed.append(int(part))
-    return tuple(parsed or DEFAULT_TARGET_LEAGUES)
+    return dedupe_positive_ints(
+        part.strip()
+        for part in raw_value.split(",")
+        if part.strip()
+    )
 
 
 def supports_first_half_statistics(season: Any) -> bool:
@@ -525,6 +504,40 @@ class StufRepository:
                 lambda batch=batch: self.supabase.table(table_name).upsert(list(batch), on_conflict=on_conflict),
                 f"{operation} batch={len(batch)}",
             )
+
+    def get_supported_league_ids(
+        self,
+        *,
+        feature: str = "pipeline",
+        season: int | None = None,
+    ) -> tuple[int, ...]:
+        flag_column = SUPPORTED_LEAGUE_FEATURE_COLUMNS.get(feature)
+        if flag_column is None:
+            raise ValueError(f"Unsupported league feature '{feature}'.")
+
+        def request():
+            query = (
+                self.supabase.table("supported_leagues")
+                .select("league_id, display_order")
+                .eq("is_active", True)
+                .eq(flag_column, True)
+                .order("display_order", desc=False)
+                .order("league_id", desc=False)
+            )
+            if season is not None:
+                query = query.eq("season", season)
+            return query
+
+        response = self._execute(
+            request,
+            f"load supported leagues feature={feature} season={season or 'ALL'}",
+        )
+        rows = response.data or []
+        return dedupe_positive_ints(
+            row.get("league_id")
+            for row in rows
+            if row.get("league_id") is not None
+        )
 
     def upsert_league_catalog_entry(self, league_entry: dict[str, Any]) -> None:
         league = league_entry.get("league") or {}
@@ -1154,7 +1167,10 @@ class StufRepository:
         full_time_statistics: list[dict[str, Any]],
         first_half_statistics: list[dict[str, Any]] | None = None,
     ) -> None:
-        def build_snapshot_map(team_statistics: list[dict[str, Any]]) -> dict[int, dict[str, Any]]:
+        def build_snapshot_map(
+            team_statistics: list[dict[str, Any]],
+            statistics_key: str = "statistics",
+        ) -> dict[int, dict[str, Any]]:
             snapshots: dict[int, dict[str, Any]] = {}
             for team_stat in team_statistics:
                 team = team_stat.get("team") or {}
@@ -1162,11 +1178,15 @@ class StufRepository:
                 if not team_id:
                     continue
 
+                statistics_items = team_stat.get(statistics_key) or []
+                if not statistics_items:
+                    continue
+
                 snapshots[team_id] = {
                     "raw_payload": team_stat,
                     "stats": {
                         item.get("type"): item.get("value")
-                        for item in (team_stat.get("statistics") or [])
+                        for item in statistics_items
                         if item.get("type")
                     },
                 }
@@ -1201,6 +1221,41 @@ class StufRepository:
                 "raw_payload": raw_payload,
             }
 
+        def first_half_looks_like_full_time(
+            first_half_map: dict[int, dict[str, Any]],
+            full_time_map: dict[int, dict[str, Any]],
+        ) -> bool:
+            comparable_fields = (
+                "Shots on Goal",
+                "Total Shots",
+                "Corner Kicks",
+                "Fouls",
+                "Offsides",
+                "Yellow Cards",
+                "Red Cards",
+                "Goalkeeper Saves",
+            )
+            compared = 0
+
+            for team_id, first_half_snapshot in first_half_map.items():
+                full_time_snapshot = full_time_map.get(team_id)
+                if full_time_snapshot is None:
+                    continue
+
+                first_half_stats = first_half_snapshot["stats"]
+                full_time_stats = full_time_snapshot["stats"]
+
+                for field in comparable_fields:
+                    first_half_value = parse_optional_int(first_half_stats.get(field))
+                    full_time_value = parse_optional_int(full_time_stats.get(field))
+                    if first_half_value is None or full_time_value is None:
+                        continue
+                    compared += 1
+                    if first_half_value != full_time_value:
+                        return False
+
+            return compared > 0
+
         ft_snapshots = build_snapshot_map(full_time_statistics)
         if len(ft_snapshots) < 2:
             self.logger.warning(
@@ -1209,13 +1264,30 @@ class StufRepository:
             )
             return
 
-        first_half_snapshots = build_snapshot_map(first_half_statistics or [])
+        half_statistics_rows = first_half_statistics or []
+        first_half_snapshots = build_snapshot_map(half_statistics_rows, "statistics_1h")
+        second_half_snapshots = build_snapshot_map(half_statistics_rows, "statistics_2h")
+        if not first_half_snapshots and half_statistics_rows:
+            legacy_first_half_snapshots = build_snapshot_map(half_statistics_rows)
+            if legacy_first_half_snapshots and not first_half_looks_like_full_time(
+                legacy_first_half_snapshots,
+                ft_snapshots,
+            ):
+                first_half_snapshots = legacy_first_half_snapshots
+
         if first_half_snapshots and set(first_half_snapshots.keys()) != set(ft_snapshots.keys()):
             self.logger.warning(
                 "Fixture %s recibio fixture_statistics 1H parciales. Se omiten periodos 1H/2H hasta tener ambos equipos.",
                 fixture_id,
             )
             first_half_snapshots = {}
+            second_half_snapshots = {}
+        if second_half_snapshots and set(second_half_snapshots.keys()) != set(ft_snapshots.keys()):
+            self.logger.warning(
+                "Fixture %s recibio fixture_statistics 2H parciales. Se omite 2H hasta tener ambos equipos.",
+                fixture_id,
+            )
+            second_half_snapshots = {}
 
         rows: list[dict[str, Any]] = []
 
@@ -1229,6 +1301,12 @@ class StufRepository:
 
             first_half_stats = first_half_snapshot["stats"]
             rows.append(build_period_row(team_id, "1H", first_half_stats, first_half_snapshot["raw_payload"]))
+
+            second_half_snapshot = second_half_snapshots.get(team_id)
+            if second_half_snapshot is not None:
+                second_half_stats = second_half_snapshot["stats"]
+                rows.append(build_period_row(team_id, "2H", second_half_stats, second_half_snapshot["raw_payload"]))
+                continue
 
             second_half_row = {
                 "fixture_id": fixture_id,
@@ -1646,6 +1724,12 @@ class StufRepository:
             opp_1h = away_stats_1h if is_home else home_stats_1h
             own_2h = home_stats_2h if is_home else away_stats_2h
             opp_2h = away_stats_2h if is_home else home_stats_2h
+            corners_for_2h = own_2h.get("corners")
+            if corners_for_2h is None:
+                corners_for_2h = second_half(own.get("corners"), own_1h.get("corners"))
+            corners_against_2h = opp_2h.get("corners")
+            if corners_against_2h is None:
+                corners_against_2h = second_half(opp.get("corners"), opp_1h.get("corners"))
 
             return {
                 "fixture_id": fixture_id,
@@ -1672,9 +1756,9 @@ class StufRepository:
                 "corners_for_1h": own_1h.get("corners"),
                 "corners_against_1h": opp_1h.get("corners"),
                 "total_corners_1h": sum_optional_ints(own_1h.get("corners"), opp_1h.get("corners")),
-                "corners_for_2h": own_2h.get("corners"),
-                "corners_against_2h": opp_2h.get("corners"),
-                "total_corners_2h": sum_optional_ints(own_2h.get("corners"), opp_2h.get("corners")),
+                "corners_for_2h": corners_for_2h,
+                "corners_against_2h": corners_against_2h,
+                "total_corners_2h": sum_optional_ints(corners_for_2h, corners_against_2h),
                 "yellow_cards_for": yellow_for,
                 "red_cards_for": red_for,
                 "cards_for": cards_for,
@@ -2396,7 +2480,13 @@ async def sync_reference_catalogs(
     target_leagues: Sequence[int] | None = None,
     include_odds_catalogs: bool = True,
 ) -> dict[tuple[int, int], dict[str, Any]]:
-    for league_id in target_leagues or settings.target_leagues:
+    scoped_target_leagues = tuple(target_leagues or settings.target_leagues)
+    if not scoped_target_leagues:
+        scoped_target_leagues = repository.get_supported_league_ids(feature="pipeline")
+    if not scoped_target_leagues:
+        raise RuntimeError("No supported leagues configured. Add rows to supported_leagues or pass --leagues.")
+
+    for league_id in scoped_target_leagues:
         payload = await api_client.fetch("leagues", {"id": league_id})
         for item in (payload or {}).get("response", []):
             repository.upsert_league_catalog_entry(item)
@@ -2492,8 +2582,27 @@ def parse_cli_args(description: str) -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_target_leagues(args: argparse.Namespace, settings: Settings) -> tuple[int, ...]:
+def resolve_target_leagues(
+    args: argparse.Namespace,
+    settings: Settings,
+    repository: StufRepository | None = None,
+    *,
+    feature: str = "pipeline",
+    season: int | None = None,
+) -> tuple[int, ...]:
     raw_leagues = getattr(args, "leagues", None)
     if raw_leagues:
         return parse_target_leagues(raw_leagues)
-    return settings.target_leagues
+
+    if settings.target_leagues:
+        return settings.target_leagues
+
+    if repository is None:
+        raise RuntimeError("No supported leagues configured. Add rows to supported_leagues or pass --leagues.")
+
+    resolved_season = season if season is not None else getattr(args, "season", None)
+    configured_leagues = repository.get_supported_league_ids(feature=feature, season=resolved_season)
+    if configured_leagues:
+        return configured_leagues
+
+    raise RuntimeError("No supported leagues configured. Add rows to supported_leagues or pass --leagues.")

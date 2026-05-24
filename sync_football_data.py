@@ -35,7 +35,7 @@ async def main() -> None:
     ensure_market_definitions(repository)
 
     target_date = args.target_date or (utcnow() - timedelta(days=1)).date().isoformat()
-    target_leagues = resolve_target_leagues(args, settings)
+    target_leagues = resolve_target_leagues(args, settings, repository, season=args.season)
     include_players = not args.skip_players
     include_predictions = not args.skip_predictions
     LOGGER.info(

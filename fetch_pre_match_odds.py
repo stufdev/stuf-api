@@ -32,7 +32,7 @@ async def main() -> None:
     settings = load_settings()
     supabase = create_supabase_client(settings)
     repository = StufRepository(supabase, LOGGER)
-    target_leagues = resolve_target_leagues(args, settings)
+    target_leagues = resolve_target_leagues(args, settings, repository, season=args.season)
 
     async with ApiFootballClient(settings, LOGGER, request_delay_seconds=args.request_delay) as api_client:
         coverage_map = await sync_reference_catalogs(api_client, repository, settings, target_leagues=target_leagues)

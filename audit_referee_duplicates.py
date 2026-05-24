@@ -4,6 +4,7 @@ from collections import Counter, defaultdict
 from typing import Any, Callable
 
 from pipeline_core import (
+    StufRepository,
     build_referee_alias_key,
     choose_preferred_referee_name,
     configure_logging,
@@ -76,7 +77,8 @@ def main() -> None:
     args = parse_cli_args("Auditoria de arbitros potencialmente duplicados.")
     settings = load_settings()
     supabase = create_supabase_client(settings)
-    target_leagues = resolve_target_leagues(args, settings)
+    repository = StufRepository(supabase, LOGGER)
+    target_leagues = resolve_target_leagues(args, settings, repository, season=args.season)
 
     def apply_context_filters(query: Any) -> Any:
         if target_leagues:

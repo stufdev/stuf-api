@@ -18,7 +18,7 @@ def main() -> None:
     repository = StufRepository(supabase, LOGGER)
 
     season = args.season or 2025
-    target_leagues = resolve_target_leagues(args, settings)
+    target_leagues = resolve_target_leagues(args, settings, repository, season=args.season)
 
     for league_id in target_leagues:
         team_ids = repository.get_team_ids_for_league_season(league_id, season)

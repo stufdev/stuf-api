@@ -3,6 +3,125 @@ from __future__ import annotations
 from typing import Any
 
 
+def _line_key(line: float) -> str:
+    return str(line).replace(".", "_")
+
+
+def _market(
+    key: str,
+    category: str,
+    label: str,
+    subject: str,
+    metric: str,
+    operator: str,
+    line: float | None,
+    display_order: int,
+    period: str = "FT",
+    family: str | None = None,
+) -> dict[str, Any]:
+    row = {
+        "key": key,
+        "category": category,
+        "label": label,
+        "subject": subject,
+        "metric": metric,
+        "operator": operator,
+        "line": line,
+        "period": period,
+        "display_order": display_order,
+    }
+    if family is not None:
+        row["family"] = family
+    return row
+
+
+def _goals_market_definitions() -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    order = 50
+
+    for line in (1.5, 2.5, 3.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"MATCH_OVER_{key_line}_GOALS", "goals", f"Over {line} Total Goals", "match", "goals", "over", line, order, family="match_totals"))
+        order += 1
+        rows.append(_market(f"MATCH_UNDER_{key_line}_GOALS", "goals", f"Under {line} Total Goals", "match", "goals", "under", line, order, family="match_totals"))
+        order += 1
+
+    for key, label, line in (
+        ("MATCH_GOAL_RANGE_0_1", "0-1 Goals", 1.0),
+        ("MATCH_GOAL_RANGE_2_3", "2-3 Goals", 3.0),
+        ("MATCH_GOAL_RANGE_4_PLUS", "4+ Goals", 4.0),
+    ):
+        rows.append(_market(key, "goals", label, "match", "goals", "custom", line, order, family="match_totals"))
+        order += 1
+
+    rows.append(_market("MATCH_GOAL_IN_BOTH_HALVES", "goals", "Goal In Both Halves", "match", "goals", "custom", None, order, family="match_totals"))
+    order = 80
+
+    for line in (0.5, 1.5, 2.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"TEAM_OVER_{key_line}_GOALS_FOR", "goals", f"Over {line} Team Goals For", "team", "goals_for", "over", line, order, family="team_goals"))
+        order += 1
+        rows.append(_market(f"TEAM_OVER_{key_line}_GOALS_AGAINST", "goals", f"Over {line} Team Goals Against", "opponent", "goals_against", "over", line, order, family="team_goals"))
+        order += 1
+
+    rows.append(_market("TEAM_SCORED_BOTH_HALVES", "goals", "Team Scored In Both Halves", "team", "goals_for", "custom", None, order, family="team_goals"))
+    order += 1
+    rows.append(_market("TEAM_CONCEDED_BOTH_HALVES", "goals", "Team Conceded In Both Halves", "opponent", "goals_against", "custom", None, order, family="team_goals"))
+    order = 120
+
+    for period in ("1H", "2H"):
+        period_label = "First Half" if period == "1H" else "Second Half"
+        period_key = "1H" if period == "1H" else "2H"
+        for line in (0.5, 1.5):
+            key_line = _line_key(line)
+            rows.append(_market(f"MATCH_{period_key}_OVER_{key_line}_GOALS", "goals", f"Over {line} {period_label} Match Goals", "match", "goals", "over", line, order, period=period, family="goals_by_half"))
+            order += 1
+            rows.append(_market(f"TEAM_{period_key}_OVER_{key_line}_GOALS_FOR", "goals", f"Over {line} {period_label} Team Goals For", "team", "goals_for", "over", line, order, period=period, family="goals_by_half"))
+            order += 1
+            rows.append(_market(f"TEAM_{period_key}_OVER_{key_line}_GOALS_AGAINST", "goals", f"Over {line} {period_label} Team Goals Against", "opponent", "goals_against", "over", line, order, period=period, family="goals_by_half"))
+            order += 1
+
+    return tuple(rows)
+
+
+def _shots_market_definitions() -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    order = 700
+
+    for line in (19.5, 21.5, 23.5, 25.5, 27.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"MATCH_OVER_{key_line}_SHOTS", "shots", f"Over {line} Total Match Shots", "match", "shots", "over", line, order))
+        order += 1
+        rows.append(_market(f"MATCH_UNDER_{key_line}_SHOTS", "shots", f"Under {line} Total Match Shots", "match", "shots", "under", line, order))
+        order += 1
+
+    for line in (7.5, 9.5, 11.5, 13.5, 15.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"TEAM_OVER_{key_line}_SHOTS_FOR", "shots", f"Over {line} Team Shots For", "team", "shots_for", "over", line, order))
+        order += 1
+        rows.append(_market(f"TEAM_OVER_{key_line}_SHOTS_AGAINST", "shots", f"Over {line} Team Shots Against", "opponent", "shots_against", "over", line, order))
+        order += 1
+
+    for line in (5.5, 6.5, 7.5, 8.5, 9.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"MATCH_OVER_{key_line}_SHOTS_ON_TARGET", "shots", f"Over {line} Match Shots On Target", "match", "shots_on_target", "over", line, order))
+        order += 1
+
+    for line in (2.5, 3.5, 4.5, 5.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"TEAM_OVER_{key_line}_SHOTS_ON_TARGET_FOR", "shots", f"Over {line} Team Shots On Target For", "team", "shots_on_target", "over", line, order))
+        order += 1
+        rows.append(_market(f"TEAM_OVER_{key_line}_SHOTS_ON_TARGET_AGAINST", "shots", f"Over {line} Team Shots On Target Against", "opponent", "shots_on_target", "over", line, order))
+        order += 1
+
+    for line in (1.5, 2.5, 3.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"EACH_TEAM_OVER_{key_line}_SHOTS_ON_TARGET", "shots", f"Each Team Over {line} Shots On Target", "match", "shots_on_target", "over", line, order))
+        order += 1
+
+    return tuple(rows)
+
+
 MARKET_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "key": "WIN",
@@ -70,104 +189,17 @@ MARKET_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "period": "FT",
         "display_order": 40,
     },
+    *_goals_market_definitions(),
     {
-        "key": "MATCH_OVER_1_5_GOALS",
-        "category": "goals",
-        "label": "Over 1.5 Goals",
+        "key": "MATCH_OVER_7_5_CORNERS",
+        "category": "corners",
+        "label": "Over 7.5 Match Corners",
         "subject": "match",
-        "metric": "goals",
+        "metric": "corners",
         "operator": "over",
-        "line": 1.5,
+        "line": 7.5,
         "period": "FT",
-        "display_order": 50,
-    },
-    {
-        "key": "MATCH_OVER_2_5_GOALS",
-        "category": "goals",
-        "label": "Over 2.5 Goals",
-        "subject": "match",
-        "metric": "goals",
-        "operator": "over",
-        "line": 2.5,
-        "period": "FT",
-        "display_order": 60,
-    },
-    {
-        "key": "MATCH_OVER_3_5_GOALS",
-        "category": "goals",
-        "label": "Over 3.5 Goals",
-        "subject": "match",
-        "metric": "goals",
-        "operator": "over",
-        "line": 3.5,
-        "period": "FT",
-        "display_order": 70,
-    },
-    {
-        "key": "MATCH_UNDER_2_5_GOALS",
-        "category": "goals",
-        "label": "Under 2.5 Goals",
-        "subject": "match",
-        "metric": "goals",
-        "operator": "under",
-        "line": 2.5,
-        "period": "FT",
-        "display_order": 72,
-    },
-    {
-        "key": "MATCH_UNDER_3_5_GOALS",
-        "category": "goals",
-        "label": "Under 3.5 Goals",
-        "subject": "match",
-        "metric": "goals",
-        "operator": "under",
-        "line": 3.5,
-        "period": "FT",
-        "display_order": 74,
-    },
-    {
-        "key": "TEAM_OVER_0_5_GOALS_FOR",
-        "category": "goals",
-        "label": "Over 0.5 Team Goals For",
-        "subject": "team",
-        "metric": "goals_for",
-        "operator": "over",
-        "line": 0.5,
-        "period": "FT",
-        "display_order": 80,
-    },
-    {
-        "key": "TEAM_OVER_1_5_GOALS_FOR",
-        "category": "goals",
-        "label": "Over 1.5 Team Goals For",
-        "subject": "team",
-        "metric": "goals_for",
-        "operator": "over",
-        "line": 1.5,
-        "period": "FT",
-        "display_order": 90,
-    },
-    {
-        "key": "TEAM_OVER_0_5_GOALS_AGAINST",
-        "category": "goals",
-        "label": "Over 0.5 Team Goals Against",
-        "subject": "opponent",
-        "metric": "goals_against",
-        "operator": "over",
-        "line": 0.5,
-        "period": "FT",
-        "display_order": 100,
-    },
-    {
-        "key": "TEAM_OVER_1_5_GOALS_AGAINST",
-        "category": "goals",
-        "label": "Over 1.5 Team Goals Against",
-        "subject": "opponent",
-        "metric": "goals_against",
-        "operator": "over",
-        "line": 1.5,
-        "period": "FT",
-        "display_order": 110,
+        "display_order": 195,
     },
     {
         "key": "MATCH_OVER_8_5_CORNERS",
@@ -201,6 +233,94 @@ MARKET_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "line": 10.5,
         "period": "FT",
         "display_order": 220,
+    },
+    {
+        "key": "MATCH_OVER_11_5_CORNERS",
+        "category": "corners",
+        "label": "Over 11.5 Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 11.5,
+        "period": "FT",
+        "display_order": 225,
+    },
+    {
+        "key": "MATCH_OVER_12_5_CORNERS",
+        "category": "corners",
+        "label": "Over 12.5 Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 12.5,
+        "period": "FT",
+        "display_order": 226,
+    },
+    {
+        "key": "MATCH_UNDER_7_5_CORNERS",
+        "category": "corners",
+        "label": "Under 7.5 Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "under",
+        "line": 7.5,
+        "period": "FT",
+        "display_order": 227,
+    },
+    {
+        "key": "MATCH_UNDER_8_5_CORNERS",
+        "category": "corners",
+        "label": "Under 8.5 Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "under",
+        "line": 8.5,
+        "period": "FT",
+        "display_order": 228,
+    },
+    {
+        "key": "MATCH_UNDER_9_5_CORNERS",
+        "category": "corners",
+        "label": "Under 9.5 Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "under",
+        "line": 9.5,
+        "period": "FT",
+        "display_order": 229,
+    },
+    {
+        "key": "MATCH_UNDER_10_5_CORNERS",
+        "category": "corners",
+        "label": "Under 10.5 Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "under",
+        "line": 10.5,
+        "period": "FT",
+        "display_order": 230,
+    },
+    {
+        "key": "MATCH_UNDER_11_5_CORNERS",
+        "category": "corners",
+        "label": "Under 11.5 Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "under",
+        "line": 11.5,
+        "period": "FT",
+        "display_order": 231,
+    },
+    {
+        "key": "MATCH_UNDER_12_5_CORNERS",
+        "category": "corners",
+        "label": "Under 12.5 Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "under",
+        "line": 12.5,
+        "period": "FT",
+        "display_order": 232,
     },
     {
         "key": "TEAM_OVER_2_5_CORNERS_FOR",
@@ -247,6 +367,17 @@ MARKET_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "display_order": 255,
     },
     {
+        "key": "TEAM_OVER_6_5_CORNERS_FOR",
+        "category": "corners",
+        "label": "Over 6.5 Team Corners For",
+        "subject": "team",
+        "metric": "corners_for",
+        "operator": "over",
+        "line": 6.5,
+        "period": "FT",
+        "display_order": 256,
+    },
+    {
         "key": "TEAM_OVER_2_5_CORNERS_AGAINST",
         "category": "corners",
         "label": "Over 2.5 Team Corners Against",
@@ -269,6 +400,83 @@ MARKET_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "display_order": 265,
     },
     {
+        "key": "TEAM_OVER_4_5_CORNERS_AGAINST",
+        "category": "corners",
+        "label": "Over 4.5 Team Corners Against",
+        "subject": "opponent",
+        "metric": "corners_against",
+        "operator": "over",
+        "line": 4.5,
+        "period": "FT",
+        "display_order": 266,
+    },
+    {
+        "key": "TEAM_OVER_5_5_CORNERS_AGAINST",
+        "category": "corners",
+        "label": "Over 5.5 Team Corners Against",
+        "subject": "opponent",
+        "metric": "corners_against",
+        "operator": "over",
+        "line": 5.5,
+        "period": "FT",
+        "display_order": 267,
+    },
+    {
+        "key": "TEAM_OVER_6_5_CORNERS_AGAINST",
+        "category": "corners",
+        "label": "Over 6.5 Team Corners Against",
+        "subject": "opponent",
+        "metric": "corners_against",
+        "operator": "over",
+        "line": 6.5,
+        "period": "FT",
+        "display_order": 268,
+    },
+    {
+        "key": "EACH_TEAM_OVER_1_5_CORNERS",
+        "category": "corners",
+        "label": "Each Team Over 1.5 Corners",
+        "subject": "each_team",
+        "metric": "corners",
+        "operator": "over",
+        "line": 1.5,
+        "period": "FT",
+        "display_order": 269,
+    },
+    {
+        "key": "EACH_TEAM_OVER_2_5_CORNERS",
+        "category": "corners",
+        "label": "Each Team Over 2.5 Corners",
+        "subject": "each_team",
+        "metric": "corners",
+        "operator": "over",
+        "line": 2.5,
+        "period": "FT",
+        "display_order": 270,
+    },
+    {
+        "key": "EACH_TEAM_OVER_3_5_CORNERS",
+        "category": "corners",
+        "label": "Each Team Over 3.5 Corners",
+        "subject": "each_team",
+        "metric": "corners",
+        "operator": "over",
+        "line": 3.5,
+        "period": "FT",
+        "display_order": 271,
+    },
+    {
+        "key": "EACH_TEAM_OVER_4_5_CORNERS",
+        "category": "corners",
+        "label": "Each Team Over 4.5 Corners",
+        "subject": "each_team",
+        "metric": "corners",
+        "operator": "over",
+        "line": 4.5,
+        "period": "FT",
+        "display_order": 272,
+    },
+    {
         "key": "MOST_CORNERS",
         "category": "corners",
         "label": "Most Corners",
@@ -277,7 +485,205 @@ MARKET_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "operator": "most",
         "line": None,
         "period": "FT",
-        "display_order": 270,
+        "display_order": 280,
+    },
+    {
+        "key": "MATCH_1H_OVER_3_5_CORNERS",
+        "category": "corners",
+        "label": "Over 3.5 First Half Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 3.5,
+        "period": "1H",
+        "display_order": 281,
+    },
+    {
+        "key": "MATCH_1H_OVER_4_5_CORNERS",
+        "category": "corners",
+        "label": "Over 4.5 First Half Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 4.5,
+        "period": "1H",
+        "display_order": 282,
+    },
+    {
+        "key": "MATCH_1H_OVER_5_5_CORNERS",
+        "category": "corners",
+        "label": "Over 5.5 First Half Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 5.5,
+        "period": "1H",
+        "display_order": 283,
+    },
+    {
+        "key": "MATCH_1H_OVER_6_5_CORNERS",
+        "category": "corners",
+        "label": "Over 6.5 First Half Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 6.5,
+        "period": "1H",
+        "display_order": 284,
+    },
+    {
+        "key": "TEAM_1H_OVER_1_5_CORNERS_FOR",
+        "category": "corners",
+        "label": "Over 1.5 First Half Team Corners For",
+        "subject": "team",
+        "metric": "corners_for",
+        "operator": "over",
+        "line": 1.5,
+        "period": "1H",
+        "display_order": 285,
+    },
+    {
+        "key": "TEAM_1H_OVER_2_5_CORNERS_FOR",
+        "category": "corners",
+        "label": "Over 2.5 First Half Team Corners For",
+        "subject": "team",
+        "metric": "corners_for",
+        "operator": "over",
+        "line": 2.5,
+        "period": "1H",
+        "display_order": 286,
+    },
+    {
+        "key": "TEAM_1H_OVER_3_5_CORNERS_FOR",
+        "category": "corners",
+        "label": "Over 3.5 First Half Team Corners For",
+        "subject": "team",
+        "metric": "corners_for",
+        "operator": "over",
+        "line": 3.5,
+        "period": "1H",
+        "display_order": 287,
+    },
+    {
+        "key": "TEAM_1H_OVER_1_5_CORNERS_AGAINST",
+        "category": "corners",
+        "label": "Over 1.5 First Half Team Corners Against",
+        "subject": "opponent",
+        "metric": "corners_against",
+        "operator": "over",
+        "line": 1.5,
+        "period": "1H",
+        "display_order": 288,
+    },
+    {
+        "key": "TEAM_1H_OVER_2_5_CORNERS_AGAINST",
+        "category": "corners",
+        "label": "Over 2.5 First Half Team Corners Against",
+        "subject": "opponent",
+        "metric": "corners_against",
+        "operator": "over",
+        "line": 2.5,
+        "period": "1H",
+        "display_order": 289,
+    },
+    {
+        "key": "TEAM_1H_OVER_3_5_CORNERS_AGAINST",
+        "category": "corners",
+        "label": "Over 3.5 First Half Team Corners Against",
+        "subject": "opponent",
+        "metric": "corners_against",
+        "operator": "over",
+        "line": 3.5,
+        "period": "1H",
+        "display_order": 290,
+    },
+    {
+        "key": "MATCH_2H_OVER_3_5_CORNERS",
+        "category": "corners",
+        "label": "Over 3.5 Second Half Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 3.5,
+        "period": "2H",
+        "display_order": 291,
+    },
+    {
+        "key": "MATCH_2H_OVER_4_5_CORNERS",
+        "category": "corners",
+        "label": "Over 4.5 Second Half Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 4.5,
+        "period": "2H",
+        "display_order": 292,
+    },
+    {
+        "key": "MATCH_2H_OVER_5_5_CORNERS",
+        "category": "corners",
+        "label": "Over 5.5 Second Half Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 5.5,
+        "period": "2H",
+        "display_order": 293,
+    },
+    {
+        "key": "MATCH_2H_OVER_6_5_CORNERS",
+        "category": "corners",
+        "label": "Over 6.5 Second Half Match Corners",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 6.5,
+        "period": "2H",
+        "display_order": 294,
+    },
+    {
+        "key": "MATCH_EACH_HALF_OVER_3_5_CORNERS",
+        "category": "corners",
+        "label": "Over 3.5 Corners In Each Half",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 3.5,
+        "period": "FT",
+        "display_order": 295,
+    },
+    {
+        "key": "MATCH_EACH_HALF_OVER_4_5_CORNERS",
+        "category": "corners",
+        "label": "Over 4.5 Corners In Each Half",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 4.5,
+        "period": "FT",
+        "display_order": 296,
+    },
+    {
+        "key": "MATCH_EACH_HALF_OVER_5_5_CORNERS",
+        "category": "corners",
+        "label": "Over 5.5 Corners In Each Half",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 5.5,
+        "period": "FT",
+        "display_order": 297,
+    },
+    {
+        "key": "MATCH_EACH_HALF_OVER_6_5_CORNERS",
+        "category": "corners",
+        "label": "Over 6.5 Corners In Each Half",
+        "subject": "match",
+        "metric": "corners",
+        "operator": "over",
+        "line": 6.5,
+        "period": "FT",
+        "display_order": 298,
     },
     {
         "key": "MATCH_OVER_1_5_CARDS",
@@ -565,116 +971,7 @@ MARKET_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "period": "FT",
         "display_order": 462,
     },
-    {
-        "key": "MATCH_OVER_0_5_1H_GOALS",
-        "category": "half",
-        "label": "Over 0.5 1st Half Goals",
-        "subject": "match",
-        "metric": "goals",
-        "operator": "over",
-        "line": 0.5,
-        "period": "1H",
-        "display_order": 500,
-    },
-    {
-        "key": "MATCH_OVER_1_5_1H_GOALS",
-        "category": "half",
-        "label": "Over 1.5 1st Half Goals",
-        "subject": "match",
-        "metric": "goals",
-        "operator": "over",
-        "line": 1.5,
-        "period": "1H",
-        "display_order": 510,
-    },
-    {
-        "key": "TEAM_OVER_0_5_1H_GOALS_FOR",
-        "category": "half",
-        "label": "Over 0.5 1st Half Goals For",
-        "subject": "team",
-        "metric": "goals_for",
-        "operator": "over",
-        "line": 0.5,
-        "period": "1H",
-        "display_order": 520,
-    },
-    {
-        "key": "TEAM_OVER_0_5_1H_GOALS_AGAINST",
-        "category": "half",
-        "label": "Over 0.5 1st Half Goals Against",
-        "subject": "opponent",
-        "metric": "goals_against",
-        "operator": "over",
-        "line": 0.5,
-        "period": "1H",
-        "display_order": 530,
-    },
-    {
-        "key": "MATCH_OVER_0_5_2H_GOALS",
-        "category": "half",
-        "label": "Over 0.5 2nd Half Goals",
-        "subject": "match",
-        "metric": "goals",
-        "operator": "over",
-        "line": 0.5,
-        "period": "2H",
-        "display_order": 600,
-    },
-    {
-        "key": "MATCH_OVER_1_5_2H_GOALS",
-        "category": "half",
-        "label": "Over 1.5 2nd Half Goals",
-        "subject": "match",
-        "metric": "goals",
-        "operator": "over",
-        "line": 1.5,
-        "period": "2H",
-        "display_order": 610,
-    },
-    {
-        "key": "TEAM_OVER_0_5_2H_GOALS_FOR",
-        "category": "half",
-        "label": "Over 0.5 2nd Half Goals For",
-        "subject": "team",
-        "metric": "goals_for",
-        "operator": "over",
-        "line": 0.5,
-        "period": "2H",
-        "display_order": 620,
-    },
-    {
-        "key": "TEAM_OVER_0_5_2H_GOALS_AGAINST",
-        "category": "half",
-        "label": "Over 0.5 2nd Half Goals Against",
-        "subject": "opponent",
-        "metric": "goals_against",
-        "operator": "over",
-        "line": 0.5,
-        "period": "2H",
-        "display_order": 630,
-    },
-    {
-        "key": "TEAM_OVER_10_5_SHOTS_FOR",
-        "category": "shots",
-        "label": "Over 10.5 Team Shots For",
-        "subject": "team",
-        "metric": "shots_for",
-        "operator": "over",
-        "line": 10.5,
-        "period": "FT",
-        "display_order": 700,
-    },
-    {
-        "key": "TEAM_OVER_3_5_SHOTS_ON_TARGET_FOR",
-        "category": "shots",
-        "label": "Over 3.5 Team Shots On Target For",
-        "subject": "team",
-        "metric": "shots_on_target",
-        "operator": "over",
-        "line": 3.5,
-        "period": "FT",
-        "display_order": 710,
-    },
+    *_shots_market_definitions(),
     {
         "key": "MATCH_OVER_20_5_FOULS",
         "category": "fouls",

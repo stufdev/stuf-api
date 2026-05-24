@@ -52,7 +52,7 @@ async def main() -> None:
     settings = load_settings()
     supabase = create_supabase_client(settings)
     repository = StufRepository(supabase, LOGGER)
-    target_leagues = resolve_target_leagues(args, settings)
+    target_leagues = resolve_target_leagues(args, settings, repository, season=args.season)
     include_predictions = not args.skip_predictions
     base_date = args.target_date or utcnow().date().isoformat()
     base_date_value = datetime.fromisoformat(base_date).date()

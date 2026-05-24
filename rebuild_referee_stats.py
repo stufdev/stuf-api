@@ -21,7 +21,7 @@ def main() -> None:
     ensure_market_definitions(repository)
 
     season = args.season or 2025
-    target_leagues = resolve_target_leagues(args, settings)
+    target_leagues = resolve_target_leagues(args, settings, repository, season=args.season)
 
     for league_id in target_leagues:
         LOGGER.info("Recalculando referee stats para liga=%s temporada=%s.", league_id, season)

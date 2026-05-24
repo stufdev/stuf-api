@@ -9,7 +9,7 @@ from pipeline_core import (
     configure_logging,
     create_supabase_client,
     load_settings,
-    parse_target_leagues,
+    resolve_target_leagues as resolve_pipeline_target_leagues,
     utcnow,
 )
 
@@ -29,11 +29,12 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def resolve_target_leagues(args: argparse.Namespace) -> tuple[int, ...]:
-    settings = load_settings()
-    if args.leagues:
-        return parse_target_leagues(args.leagues)
-    return settings.target_leagues
+def resolve_target_leagues(
+    args: argparse.Namespace,
+    settings,
+    repository: StufRepository,
+) -> tuple[int, ...]:
+    return resolve_pipeline_target_leagues(args, settings, repository, season=args.season)
 
 
 def apply_league_filter(query, target_leagues: tuple[int, ...], column: str = "league_id"):
@@ -69,7 +70,7 @@ async def main() -> None:
     settings = load_settings()
     supabase = create_supabase_client(settings)
     repository = StufRepository(supabase, LOGGER)
-    target_leagues = resolve_target_leagues(args)
+    target_leagues = resolve_target_leagues(args, settings, repository)
     target_date = datetime.fromisoformat(args.target_date).date() if args.target_date else utcnow().date()
     start_at = datetime.combine(target_date - timedelta(days=max(1, args.days_back) - 1), time.min)
     end_at = datetime.combine(target_date, time.max)
