@@ -24,7 +24,8 @@ SCOPES = ("overall", "home", "away")
 UPCOMING_STATUSES = ("NS", "TBD")
 NEXT_FIXTURE_WINDOW_DAYS = 6
 PAGE_SIZE = 1000
-MARKET_CATEGORIES = {"corners", "goals", "shots"}
+MARKET_CATEGORIES = {"corners", "goals", "shots", "offsides", "cards"}
+OrderSpec = tuple[str, bool] | tuple[tuple[str, bool], ...]
 
 
 @dataclass(frozen=True)
@@ -65,7 +66,7 @@ def select_all(
     in_filters: dict[str, Iterable[Any]] | None = None,
     gte: dict[str, Any] | None = None,
     lt: dict[str, Any] | None = None,
-    order: tuple[str, bool] | None = None,
+    order: OrderSpec | None = None,
 ) -> list[dict[str, Any]]:
     eq = eq or {}
     in_filters = {key: tuple(value) for key, value in (in_filters or {}).items()}
@@ -87,8 +88,7 @@ def select_all(
                 query = query.gte(key, value)
             for key, value in lt.items():
                 query = query.lt(key, value)
-            if order:
-                column, ascending = order
+            for column, ascending in normalize_order(order):
                 query = query.order(column, desc=not ascending)
             return query.range(offset, offset + PAGE_SIZE - 1)
 
@@ -99,6 +99,42 @@ def select_all(
             break
         offset += PAGE_SIZE
     return rows
+
+
+def normalize_order(order: OrderSpec | None) -> tuple[tuple[str, bool], ...]:
+    if order is None:
+        return ()
+    if len(order) == 2 and isinstance(order[0], str):
+        column, ascending = order
+        return ((column, bool(ascending)),)
+    return tuple((str(column), bool(ascending)) for column, ascending in order)
+
+
+def dedupe_rows(
+    rows: list[dict[str, Any]],
+    *,
+    key_columns: tuple[str, ...],
+    label: str,
+) -> list[dict[str, Any]]:
+    seen: set[tuple[Any, ...]] = set()
+    unique_rows: list[dict[str, Any]] = []
+    duplicates = 0
+    for row in rows:
+        key = tuple(row.get(column) for column in key_columns)
+        if key in seen:
+            duplicates += 1
+            continue
+        seen.add(key)
+        unique_rows.append(row)
+
+    if duplicates:
+        LOGGER.warning(
+            "Dropped duplicate %s rows before projection: duplicates=%s unique=%s",
+            label,
+            duplicates,
+            len(unique_rows),
+        )
+    return unique_rows
 
 
 def select_all_in_chunks(
@@ -238,7 +274,7 @@ def load_active_market_keys(repository: StufRepository, category: str, market_ke
         "market_definitions",
         "key,is_active,display_order",
         eq=eq,
-        order=("display_order", True),
+        order=(("display_order", True), ("key", True)),
     )
     market_keys = tuple(str(row["key"]) for row in rows if row.get("key"))
     if market_key and not market_keys:
@@ -374,6 +410,23 @@ def shot_values_for_market(market_key: str, fixture: dict[str, Any]) -> tuple[fl
     return home, away, total_value
 
 
+def offside_values_for_market(_: str, fixture: dict[str, Any]) -> tuple[float | None, float | None, float | None]:
+    home = maybe_float(fixture.get("home_offsides"))
+    away = maybe_float(fixture.get("away_offsides"))
+    total = None if home is None or away is None else home + away
+    return home, away, total
+
+
+def card_values_for_market(market_key: str, fixture: dict[str, Any]) -> tuple[float | None, float | None, float | None]:
+    home = maybe_float(fixture.get("home_cards"))
+    away = maybe_float(fixture.get("away_cards"))
+    if "EACH_TEAM" in market_key:
+        total_value = None if home is None or away is None else min(home, away)
+    else:
+        total_value = None if home is None or away is None else home + away
+    return home, away, total_value
+
+
 def goal_values_for_market(
     market_key: str,
     fixture: dict[str, Any],
@@ -415,7 +468,32 @@ def market_values_for_category(
         return goal_values_for_market(market_key, fixture, facts_by_fixture_team)
     if category == "shots":
         return shot_values_for_market(market_key, fixture)
+    if category == "offsides":
+        return offside_values_for_market(market_key, fixture)
+    if category == "cards":
+        return card_values_for_market(market_key, fixture)
     raise RuntimeError(f"Market Serving Layer no soporta evidencia para category={category}.")
+
+
+def team_values_for_market(
+    *,
+    category: str,
+    market_key: str,
+    team_id: int,
+    home_team_id: int,
+    home_value: float | None,
+    away_value: float | None,
+) -> tuple[float | None, float | None]:
+    own_value = home_value if team_id == home_team_id else away_value
+    opponent_value = away_value if team_id == home_team_id else home_value
+
+    if category == "offsides" and market_key.endswith("_OFFSIDES_AGAINST"):
+        return opponent_value, own_value
+
+    if category == "cards" and market_key.endswith("_CARDS_AGAINST"):
+        return opponent_value, own_value
+
+    return own_value, opponent_value
 
 
 def build_market_team_rankings(
@@ -575,8 +653,14 @@ def build_team_market_match_evidence(
         home_team_id = int(fixture["home_team_id"])
         away_team_id = int(fixture["away_team_id"])
         home_value, away_value, total_value = market_values_for_category(category, market_key, fixture, facts_by_fixture_team)
-        team_value = home_value if team_id == home_team_id else away_value
-        opponent_value = away_value if team_id == home_team_id else home_value
+        team_value, opponent_value = team_values_for_market(
+            category=category,
+            market_key=market_key,
+            team_id=team_id,
+            home_team_id=home_team_id,
+            home_value=home_value,
+            away_value=away_value,
+        )
 
         rows.append({
             "league_id": league_id,
@@ -630,6 +714,8 @@ def replace_projection_rows(
     filters: dict[str, Any],
     on_conflict: str,
 ) -> None:
+    conflict_columns = tuple(column.strip() for column in on_conflict.split(",") if column.strip())
+    rows = dedupe_rows(rows, key_columns=conflict_columns, label=table)
     if not rows:
         delete_projection_rows(repository, table, filters, f"delete empty {table}")
         return
@@ -676,6 +762,12 @@ def rebuild_league_category(
         ),
         eq={"category": category, "league_id": league_id, "season": season},
         in_filters={"market_key": market_keys},
+        order=(("market_key", True), ("scope", True), ("team_id", True)),
+    )
+    stats = dedupe_rows(
+        stats,
+        key_columns=("market_key", "scope", "team_id"),
+        label="team_season_market_stats",
     )
     stats_by_key = {
         stat_key(str(row["market_key"]), int(row["team_id"]), str(row["scope"])): row
@@ -691,9 +783,10 @@ def rebuild_league_category(
         (
             "fixture_id,date,league_id,season,home_team_id,home_team_name,away_team_id,away_team_name,"
             "home_goals,away_goals,home_corners,away_corners,home_total_shots,away_total_shots,"
-            "home_shots_on_target,away_shots_on_target"
+            "home_shots_on_target,away_shots_on_target,home_offsides,away_offsides,home_cards,away_cards"
         ),
         eq={"league_id": league_id, "season": season},
+        order=("fixture_id", True),
     )
     fixture_by_id = {int(row["fixture_id"]): row for row in fixture_rows}
     fixture_status_rows = select_all(
@@ -701,6 +794,7 @@ def rebuild_league_category(
         "fixtures",
         "id,status_short,date",
         eq={"league_id": league_id, "season": season},
+        order=("id", True),
     )
     fixture_status_by_id = {
         int(row["id"]): str(row["status_short"]) if row.get("status_short") is not None else None
@@ -711,9 +805,11 @@ def rebuild_league_category(
         "team_fixture_facts",
         (
             "fixture_id,team_id,corners_for_1h,corners_for_2h,goals_for,goals_against,total_match_goals,"
-            "goals_for_1h,goals_against_1h,total_1h_goals,goals_for_2h,goals_against_2h,total_2h_goals"
+            "goals_for_1h,goals_against_1h,total_1h_goals,goals_for_2h,goals_against_2h,total_2h_goals,"
+            "offsides_for,offsides_against,total_offsides"
         ),
         eq={"league_id": league_id, "season": season},
+        order=(("fixture_id", True), ("team_id", True)),
     )
     facts_by_fixture_team = {
         (int(row["fixture_id"]), int(row["team_id"])): row
@@ -725,7 +821,18 @@ def rebuild_league_category(
         "fixture_id,team_id,league_id,season,played_at,scope,market_key,result,numeric_value",
         eq={"league_id": league_id, "season": season},
         in_filters={"market_key": market_keys},
-        order=("played_at", False),
+        order=(
+            ("played_at", False),
+            ("fixture_id", True),
+            ("team_id", True),
+            ("scope", True),
+            ("market_key", True),
+        ),
+    )
+    match_results = dedupe_rows(
+        match_results,
+        key_columns=("fixture_id", "team_id", "scope", "market_key"),
+        label="team_match_market_results",
     )
 
     rankings = build_market_team_rankings(

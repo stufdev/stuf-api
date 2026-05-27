@@ -267,6 +267,63 @@ def normalize_fixture_event_type(raw_type: Any, detail: Any) -> str:
     return "Other"
 
 
+def normalize_card_event_detail(detail: Any) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(detail or "").strip().lower())
+
+
+def card_event_detail_bucket(detail: Any) -> str:
+    normalized = normalize_card_event_detail(detail)
+    if "secondyellow" in normalized or "yellowred" in normalized or ("yellow" in normalized and "red" in normalized):
+        return "red_cards"
+    if "red" in normalized:
+        return "red_cards"
+    if "yellow" in normalized:
+        return "yellow_cards"
+    return "other_cards"
+
+
+def is_card_event_type(raw_type: Any, detail: Any = None) -> bool:
+    if str(raw_type or "").strip().lower() == "card":
+        return True
+    return normalize_fixture_event_type(raw_type, detail) == "Card"
+
+
+def empty_team_card_counts() -> dict[str, int]:
+    return {
+        "yellow_cards": 0,
+        "red_cards": 0,
+        "other_cards": 0,
+        "cards": 0,
+    }
+
+
+def derive_team_cards_from_events(
+    fixture_events: Sequence[dict[str, Any]],
+    home_team_id: Any,
+    away_team_id: Any,
+) -> tuple[dict[int, dict[str, int]], bool]:
+    home_id = parse_optional_int(home_team_id)
+    away_id = parse_optional_int(away_team_id)
+    team_ids = [team_id for team_id in (home_id, away_id) if team_id is not None]
+    counts = {team_id: empty_team_card_counts() for team_id in team_ids}
+    has_card_events = False
+
+    for event in fixture_events:
+        if not is_card_event_type(event.get("type"), event.get("detail")):
+            continue
+
+        team_id = parse_optional_int(event.get("team_id"))
+        if team_id not in counts:
+            continue
+
+        has_card_events = True
+        bucket = card_event_detail_bucket(event.get("detail"))
+        counts[team_id]["cards"] += 1
+        counts[team_id][bucket] += 1
+
+    return counts, has_card_events
+
+
 @dataclass(frozen=True)
 class Settings:
     api_key: str
@@ -504,6 +561,59 @@ class StufRepository:
                 lambda batch=batch: self.supabase.table(table_name).upsert(list(batch), on_conflict=on_conflict),
                 f"{operation} batch={len(batch)}",
             )
+
+    def _select_scope_rows(
+        self,
+        table_name: str,
+        columns: str,
+        filters: dict[str, Any],
+        operation: str,
+        *,
+        order_columns: Sequence[str] = (),
+        page_size: int = 1000,
+    ) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        offset = 0
+        while True:
+            def request(offset: int = offset):
+                query = self.supabase.table(table_name).select(columns)
+                for key, value in filters.items():
+                    query = query.eq(key, value)
+                for column in order_columns:
+                    query = query.order(column)
+                return query.range(offset, offset + page_size - 1)
+
+            response = self._execute(request, f"{operation} offset={offset}")
+            page = response.data or []
+            rows.extend(page)
+            if len(page) < page_size:
+                break
+            offset += page_size
+        return rows
+
+    def _delete_market_result_rows(
+        self,
+        filters: dict[str, Any],
+        operation: str,
+        *,
+        market_keys: Sequence[str] | None = None,
+    ) -> None:
+        if market_keys is None:
+            self._delete_scope_rows("team_match_market_results", filters, operation)
+            return
+
+        deduped_market_keys = tuple(dict.fromkeys(str(key) for key in market_keys if key))
+        if not deduped_market_keys:
+            return
+
+        for batch in chunked(deduped_market_keys, 100):
+            def request(batch: Sequence[str] = batch):
+                query = self.supabase.table("team_match_market_results").delete()
+                for key, value in filters.items():
+                    query = query.eq(key, value)
+                return query.in_("market_key", list(batch))
+
+            self._execute(request, f"{operation} markets={len(batch)}")
 
     def get_supported_league_ids(
         self,
@@ -1674,6 +1784,18 @@ class StufRepository:
             self.logger.warning("Fixture %s no tiene estadisticas para ambos equipos.", fixture_id)
             return False
 
+        event_response = self._execute(
+            lambda: self.supabase.table("fixture_events")
+            .select("team_id,type,detail")
+            .eq("fixture_id", fixture_id),
+            f"load fixture card events for facts fixture={fixture_id}",
+        )
+        event_card_counts, has_event_card_source = derive_team_cards_from_events(
+            event_response.data or [],
+            home_team_id,
+            away_team_id,
+        )
+
         def second_half(total: Any, first_half: Any) -> int | None:
             return subtract_optional_ints(total, first_half)
 
@@ -1712,12 +1834,22 @@ class StufRepository:
             goals_for_2h = home_goals_2h if is_home else away_goals_2h
             goals_against_2h = away_goals_2h if is_home else home_goals_2h
 
-            yellow_for = parse_optional_int(own.get("yellow_cards"))
-            red_for = parse_optional_int(own.get("red_cards"))
-            yellow_against = parse_optional_int(opp.get("yellow_cards"))
-            red_against = parse_optional_int(opp.get("red_cards"))
-            cards_for = sum_optional_ints(yellow_for, red_for)
-            cards_against = sum_optional_ints(yellow_against, red_against)
+            if has_event_card_source:
+                own_card_events = event_card_counts.get(team_id, empty_team_card_counts())
+                opp_card_events = event_card_counts.get(opponent_id, empty_team_card_counts())
+                yellow_for = own_card_events["yellow_cards"]
+                red_for = own_card_events["red_cards"]
+                yellow_against = opp_card_events["yellow_cards"]
+                red_against = opp_card_events["red_cards"]
+                cards_for = own_card_events["cards"]
+                cards_against = opp_card_events["cards"]
+            else:
+                yellow_for = parse_optional_int(own.get("yellow_cards"))
+                red_for = parse_optional_int(own.get("red_cards"))
+                yellow_against = parse_optional_int(opp.get("yellow_cards"))
+                red_against = parse_optional_int(opp.get("red_cards"))
+                cards_for = sum_optional_ints(yellow_for, red_for)
+                cards_against = sum_optional_ints(yellow_against, red_against)
             booking_points_for = derive_booking_points(own)
             booking_points_against = derive_booking_points(opp)
             own_1h = home_stats_1h if is_home else away_stats_1h
@@ -2318,7 +2450,15 @@ class StufRepository:
             older_than=marker,
         )
 
-    def replace_team_market_results(self, team_id: int, league_id: int, season: int, rows: list[dict[str, Any]]) -> None:
+    def replace_team_market_results(
+        self,
+        team_id: int,
+        league_id: int,
+        season: int,
+        rows: list[dict[str, Any]],
+        *,
+        market_keys: Sequence[str] | None = None,
+    ) -> None:
         deduped_rows: list[dict[str, Any]] = []
         seen_keys: set[tuple[Any, Any, Any, Any]] = set()
         for row in rows:
@@ -2344,39 +2484,18 @@ class StufRepository:
 
         filters = {"team_id": team_id, "league_id": league_id, "season": season}
         if not deduped_rows:
-            self._delete_scope_rows(
-                "team_match_market_results",
+            self._delete_market_result_rows(
                 filters,
                 f"delete team market results team={team_id} league={league_id} season={season}",
+                market_keys=market_keys,
             )
             return
 
-        existing_response = self._execute(
-            lambda: self.supabase.table("team_match_market_results")
-            .select("fixture_id,team_id,scope,market_key")
-            .eq("team_id", team_id)
-            .eq("league_id", league_id)
-            .eq("season", season),
-            f"load existing team market results team={team_id} league={league_id} season={season}",
+        self._delete_market_result_rows(
+            filters,
+            f"replace team market results team={team_id} league={league_id} season={season}",
+            market_keys=market_keys,
         )
-        existing_keys = {
-            (
-                row.get("fixture_id"),
-                row.get("team_id"),
-                row.get("scope"),
-                row.get("market_key"),
-            )
-            for row in existing_response.data or []
-        }
-        next_keys = {
-            (
-                row.get("fixture_id"),
-                row.get("team_id"),
-                row.get("scope"),
-                row.get("market_key"),
-            )
-            for row in deduped_rows
-        }
 
         self._upsert_rows(
             "team_match_market_results",
@@ -2385,20 +2504,18 @@ class StufRepository:
             f"upsert team market results team={team_id} league={league_id} season={season}",
         )
 
-        stale_keys = existing_keys - next_keys
-        for fixture_id, stale_team_id, scope, market_key in stale_keys:
-            self._execute(
-                lambda fixture_id=fixture_id, stale_team_id=stale_team_id, scope=scope, market_key=market_key: self.supabase.table("team_match_market_results")
-                .delete()
-                .eq("fixture_id", fixture_id)
-                .eq("team_id", stale_team_id)
-                .eq("scope", scope)
-                .eq("market_key", market_key),
-                f"delete stale team market result fixture={fixture_id} team={stale_team_id} scope={scope} market={market_key}",
-            )
-
-    def replace_team_season_market_stats(self, team_id: int, league_id: int, season: int, rows: list[dict[str, Any]]) -> None:
+    def replace_team_season_market_stats(
+        self,
+        team_id: int,
+        league_id: int,
+        season: int,
+        rows: list[dict[str, Any]],
+        *,
+        category: str | None = None,
+    ) -> None:
         filters = {"team_id": team_id, "league_id": league_id, "season": season}
+        if category is not None:
+            filters["category"] = category
         if not rows:
             self._delete_scope_rows(
                 "team_season_market_stats",
@@ -2571,6 +2688,11 @@ def parse_cli_args(description: str) -> argparse.Namespace:
     parser.add_argument("--days", type=int, default=5, help="Dias futuros a planificar.")
     parser.add_argument("--window-hours", type=int, default=3, help="Ventana horaria para odds.")
     parser.add_argument("--leagues", help="Lista CSV de league_id para esta corrida, ej: 140 o 39,140.")
+    parser.add_argument(
+        "--category",
+        choices=("corners", "goals", "shots", "offsides", "cards"),
+        help="Categoria del Market Engine a recalcular cuando el script lo soporte.",
+    )
     parser.add_argument(
         "--request-delay",
         type=float,

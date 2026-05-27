@@ -122,6 +122,53 @@ def _shots_market_definitions() -> tuple[dict[str, Any], ...]:
     return tuple(rows)
 
 
+def _offsides_market_definitions() -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    order = 900
+
+    for line in (0.5, 1.5, 2.5, 3.5, 4.5, 5.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"MATCH_OVER_{key_line}_OFFSIDES", "offsides", f"Over {line} Total Match Offsides", "match", "offsides", "over", line, order, family="match_offsides"))
+        order += 1
+        rows.append(_market(f"MATCH_UNDER_{key_line}_OFFSIDES", "offsides", f"Under {line} Total Match Offsides", "match", "offsides", "under", line, order, family="match_offsides"))
+        order += 1
+
+    for line in (0.5, 1.5, 2.5, 3.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"TEAM_OVER_{key_line}_OFFSIDES_FOR", "offsides", f"Over {line} Team Offsides For", "team", "offsides_for", "over", line, order, family="team_offsides"))
+        order += 1
+        rows.append(_market(f"TEAM_OVER_{key_line}_OFFSIDES_AGAINST", "offsides", f"Over {line} Team Offsides Against", "opponent", "offsides_against", "over", line, order, family="team_offsides"))
+        order += 1
+
+    return tuple(rows)
+
+
+def _cards_market_definitions() -> tuple[dict[str, Any], ...]:
+    rows: list[dict[str, Any]] = []
+    order = 590
+
+    for line in (1.5, 2.5, 3.5, 4.5, 5.5, 6.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"MATCH_OVER_{key_line}_CARDS", "cards", f"Over {line} Total Match Cards", "match", "cards", "over", line, order, family="match_cards"))
+        order += 1
+        rows.append(_market(f"MATCH_UNDER_{key_line}_CARDS", "cards", f"Under {line} Total Match Cards", "match", "cards", "under", line, order, family="match_cards"))
+        order += 1
+
+    for line in (0.5, 1.5, 2.5, 3.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"TEAM_OVER_{key_line}_CARDS_FOR", "cards", f"Over {line} Team Cards For", "team", "cards_for", "over", line, order, family="team_cards"))
+        order += 1
+        rows.append(_market(f"TEAM_OVER_{key_line}_CARDS_AGAINST", "cards", f"Over {line} Team Cards Against", "opponent", "cards_against", "over", line, order, family="team_cards"))
+        order += 1
+
+    for line in (0.5, 1.5, 2.5):
+        key_line = _line_key(line)
+        rows.append(_market(f"EACH_TEAM_OVER_{key_line}_CARDS", "cards", f"Each Team Over {line} Cards", "each_team", "cards", "over", line, order, family="each_team_cards"))
+        order += 1
+
+    return tuple(rows)
+
+
 MARKET_DEFINITIONS: tuple[dict[str, Any], ...] = (
     {
         "key": "WIN",
@@ -685,149 +732,7 @@ MARKET_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "period": "FT",
         "display_order": 298,
     },
-    {
-        "key": "MATCH_OVER_1_5_CARDS",
-        "category": "cards",
-        "label": "Over 1.5 Total Cards",
-        "subject": "match",
-        "metric": "cards",
-        "operator": "over",
-        "line": 1.5,
-        "period": "FT",
-        "display_order": 295,
-    },
-    {
-        "key": "MATCH_OVER_2_5_CARDS",
-        "category": "cards",
-        "label": "Over 2.5 Total Cards",
-        "subject": "match",
-        "metric": "cards",
-        "operator": "over",
-        "line": 2.5,
-        "period": "FT",
-        "display_order": 300,
-    },
-    {
-        "key": "MATCH_OVER_3_5_CARDS",
-        "category": "cards",
-        "label": "Over 3.5 Total Cards",
-        "subject": "match",
-        "metric": "cards",
-        "operator": "over",
-        "line": 3.5,
-        "period": "FT",
-        "display_order": 310,
-    },
-    {
-        "key": "MATCH_OVER_4_5_CARDS",
-        "category": "cards",
-        "label": "Over 4.5 Total Cards",
-        "subject": "match",
-        "metric": "cards",
-        "operator": "over",
-        "line": 4.5,
-        "period": "FT",
-        "display_order": 320,
-    },
-    {
-        "key": "MATCH_OVER_5_5_CARDS",
-        "category": "cards",
-        "label": "Over 5.5 Total Cards",
-        "subject": "match",
-        "metric": "cards",
-        "operator": "over",
-        "line": 5.5,
-        "period": "FT",
-        "display_order": 325,
-    },
-    {
-        "key": "MATCH_OVER_6_5_CARDS",
-        "category": "cards",
-        "label": "Over 6.5 Total Cards",
-        "subject": "match",
-        "metric": "cards",
-        "operator": "over",
-        "line": 6.5,
-        "period": "FT",
-        "display_order": 326,
-    },
-    {
-        "key": "TEAM_OVER_1_5_CARDS_FOR",
-        "category": "cards",
-        "label": "Over 1.5 Team Cards For",
-        "subject": "team",
-        "metric": "cards_for",
-        "operator": "over",
-        "line": 1.5,
-        "period": "FT",
-        "display_order": 330,
-    },
-    {
-        "key": "TEAM_OVER_2_5_CARDS_FOR",
-        "category": "cards",
-        "label": "Over 2.5 Team Cards For",
-        "subject": "team",
-        "metric": "cards_for",
-        "operator": "over",
-        "line": 2.5,
-        "period": "FT",
-        "display_order": 335,
-    },
-    {
-        "key": "OPPONENT_OVER_1_5_CARDS",
-        "category": "cards",
-        "label": "Over 1.5 Team Cards Against",
-        "subject": "opponent",
-        "metric": "cards_against",
-        "operator": "over",
-        "line": 1.5,
-        "period": "FT",
-        "display_order": 340,
-    },
-    {
-        "key": "OPPONENT_OVER_2_5_CARDS",
-        "category": "cards",
-        "label": "Over 2.5 Team Cards Against",
-        "subject": "opponent",
-        "metric": "cards_against",
-        "operator": "over",
-        "line": 2.5,
-        "period": "FT",
-        "display_order": 345,
-    },
-    {
-        "key": "EACH_TEAM_OVER_0_5_CARDS",
-        "category": "cards",
-        "label": "Each Team Over 0.5 Cards",
-        "subject": "each_team",
-        "metric": "cards",
-        "operator": "over",
-        "line": 0.5,
-        "period": "FT",
-        "display_order": 350,
-    },
-    {
-        "key": "EACH_TEAM_OVER_1_5_CARDS",
-        "category": "cards",
-        "label": "Each Team Over 1.5 Cards",
-        "subject": "each_team",
-        "metric": "cards",
-        "operator": "over",
-        "line": 1.5,
-        "period": "FT",
-        "display_order": 360,
-    },
-    {
-        "key": "EACH_TEAM_OVER_2_5_CARDS",
-        "category": "cards",
-        "label": "Each Team Over 2.5 Cards",
-        "subject": "each_team",
-        "metric": "cards",
-        "operator": "over",
-        "line": 2.5,
-        "period": "FT",
-        "display_order": 370,
-    },
+    *_cards_market_definitions(),
     {
         "key": "MATCH_OVER_15_BOOKING_POINTS",
         "category": "booking_points",
@@ -994,28 +899,7 @@ MARKET_DEFINITIONS: tuple[dict[str, Any], ...] = (
         "period": "FT",
         "display_order": 810,
     },
-    {
-        "key": "MATCH_OVER_2_5_OFFSIDES",
-        "category": "offsides",
-        "label": "Over 2.5 Match Offsides",
-        "subject": "match",
-        "metric": "offsides",
-        "operator": "over",
-        "line": 2.5,
-        "period": "FT",
-        "display_order": 900,
-    },
-    {
-        "key": "TEAM_OVER_1_5_OFFSIDES_FOR",
-        "category": "offsides",
-        "label": "Over 1.5 Team Offsides For",
-        "subject": "team",
-        "metric": "offsides_for",
-        "operator": "over",
-        "line": 1.5,
-        "period": "FT",
-        "display_order": 910,
-    },
+    *_offsides_market_definitions(),
 )
 
 

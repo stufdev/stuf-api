@@ -34,18 +34,18 @@ class TeamMatchContext:
     corners_for_2h: float | None
     corners_against_2h: float | None
     total_corners_2h: float | None
-    cards_for: float
-    cards_against: float
-    total_cards: float
+    cards_for: float | None
+    cards_against: float | None
+    total_cards: float | None
     booking_points_for: float
     booking_points_against: float
     total_booking_points: float
     fouls_committed: float
     fouls_won: float
     total_fouls: float
-    offsides_for: float
-    offsides_against: float
-    total_offsides: float
+    offsides_for: float | None
+    offsides_against: float | None
+    total_offsides: float | None
     total_shots_for: float | None
     total_shots_against: float | None
     shots_on_target_for: float | None
@@ -324,6 +324,105 @@ def _shot_market_rules() -> tuple[MarketRule, ...]:
     return tuple(rules)
 
 
+def _has_total_offsides(context: TeamMatchContext) -> bool:
+    return context.offsides_for is not None and context.offsides_against is not None and context.total_offsides is not None
+
+
+def _has_team_offsides_for(context: TeamMatchContext) -> bool:
+    return context.offsides_for is not None
+
+
+def _has_team_offsides_against(context: TeamMatchContext) -> bool:
+    return context.offsides_against is not None
+
+
+def _total_offsides(context: TeamMatchContext) -> float:
+    return _value(context.total_offsides)
+
+
+def _team_offsides_for(context: TeamMatchContext) -> float:
+    return _value(context.offsides_for)
+
+
+def _team_offsides_against(context: TeamMatchContext) -> float:
+    return _value(context.offsides_against)
+
+
+def _offsides_market_rules() -> tuple[MarketRule, ...]:
+    rules: list[MarketRule] = []
+    order = 900
+
+    for line in (0.5, 1.5, 2.5, 3.5, 4.5, 5.5):
+        key_line = _line_key(line)
+        rules.append(MarketRule(f"MATCH_OVER_{key_line}_OFFSIDES", "offsides", order, _total_offsides, _over(_total_offsides, line), _has_total_offsides))
+        order += 1
+        rules.append(MarketRule(f"MATCH_UNDER_{key_line}_OFFSIDES", "offsides", order, _total_offsides, _under(_total_offsides, line), _has_total_offsides))
+        order += 1
+
+    for line in (0.5, 1.5, 2.5, 3.5):
+        key_line = _line_key(line)
+        rules.append(MarketRule(f"TEAM_OVER_{key_line}_OFFSIDES_FOR", "offsides", order, _team_offsides_for, _over(_team_offsides_for, line), _has_team_offsides_for))
+        order += 1
+        rules.append(MarketRule(f"TEAM_OVER_{key_line}_OFFSIDES_AGAINST", "offsides", order, _team_offsides_against, _over(_team_offsides_against, line), _has_team_offsides_against))
+        order += 1
+
+    return tuple(rules)
+
+
+def _has_total_cards(context: TeamMatchContext) -> bool:
+    return context.cards_for is not None and context.cards_against is not None and context.total_cards is not None
+
+
+def _has_team_cards_for(context: TeamMatchContext) -> bool:
+    return context.cards_for is not None
+
+
+def _has_team_cards_against(context: TeamMatchContext) -> bool:
+    return context.cards_against is not None
+
+
+def _total_cards(context: TeamMatchContext) -> float:
+    return _value(context.total_cards)
+
+
+def _team_cards_for(context: TeamMatchContext) -> float:
+    return _value(context.cards_for)
+
+
+def _team_cards_against(context: TeamMatchContext) -> float:
+    return _value(context.cards_against)
+
+
+def _each_team_cards(context: TeamMatchContext) -> float:
+    return min(_value(context.cards_for), _value(context.cards_against))
+
+
+def _cards_market_rules() -> tuple[MarketRule, ...]:
+    rules: list[MarketRule] = []
+    order = 590
+
+    for line in (1.5, 2.5, 3.5, 4.5, 5.5, 6.5):
+        key_line = _line_key(line)
+        rules.append(MarketRule(f"MATCH_OVER_{key_line}_CARDS", "cards", order, _total_cards, _over(_total_cards, line), _has_total_cards))
+        order += 1
+        rules.append(MarketRule(f"MATCH_UNDER_{key_line}_CARDS", "cards", order, _total_cards, _under(_total_cards, line), _has_total_cards))
+        order += 1
+
+    for line in (0.5, 1.5, 2.5, 3.5):
+        key_line = _line_key(line)
+        rules.append(MarketRule(f"TEAM_OVER_{key_line}_CARDS_FOR", "cards", order, _team_cards_for, _over(_team_cards_for, line), _has_team_cards_for))
+        order += 1
+        rules.append(MarketRule(f"TEAM_OVER_{key_line}_CARDS_AGAINST", "cards", order, _team_cards_against, _over(_team_cards_against, line), _has_team_cards_against))
+        order += 1
+
+    for line in (0.5, 1.5, 2.5):
+        key_line = _line_key(line)
+        rules.append(MarketRule(f"EACH_TEAM_OVER_{key_line}_CARDS", "cards", order, _each_team_cards, lambda c, _line=line: _each_team_cards(c) > _line, _has_total_cards))
+        order += 1
+
+    return tuple(rules)
+
+
 MARKET_RULES: tuple[MarketRule, ...] = (
     MarketRule("WIN", "result", 10, lambda c: c.goals_for - c.goals_against, _is_win),
     MarketRule("DRAW", "result", 20, lambda c: c.goals_for - c.goals_against, _is_draw),
@@ -390,24 +489,11 @@ MARKET_RULES: tuple[MarketRule, ...] = (
     MarketRule("EACH_TEAM_OVER_5_BOOKING_POINTS", "booking_points", 565, lambda c: min(c.booking_points_for, c.booking_points_against), lambda c: c.booking_points_for > 5 and c.booking_points_against > 5),
     MarketRule("EACH_TEAM_OVER_15_BOOKING_POINTS", "booking_points", 570, lambda c: min(c.booking_points_for, c.booking_points_against), lambda c: c.booking_points_for > 15 and c.booking_points_against > 15),
     MarketRule("EACH_TEAM_OVER_25_BOOKING_POINTS", "booking_points", 575, lambda c: min(c.booking_points_for, c.booking_points_against), lambda c: c.booking_points_for > 25 and c.booking_points_against > 25),
-    MarketRule("MATCH_OVER_1_5_CARDS", "cards", 590, lambda c: c.total_cards, _over(lambda c: c.total_cards, 1.5)),
-    MarketRule("MATCH_OVER_2_5_CARDS", "cards", 600, lambda c: c.total_cards, _over(lambda c: c.total_cards, 2.5)),
-    MarketRule("MATCH_OVER_3_5_CARDS", "cards", 610, lambda c: c.total_cards, _over(lambda c: c.total_cards, 3.5)),
-    MarketRule("MATCH_OVER_4_5_CARDS", "cards", 620, lambda c: c.total_cards, _over(lambda c: c.total_cards, 4.5)),
-    MarketRule("MATCH_OVER_5_5_CARDS", "cards", 625, lambda c: c.total_cards, _over(lambda c: c.total_cards, 5.5)),
-    MarketRule("MATCH_OVER_6_5_CARDS", "cards", 626, lambda c: c.total_cards, _over(lambda c: c.total_cards, 6.5)),
-    MarketRule("TEAM_OVER_1_5_CARDS_FOR", "cards", 630, lambda c: c.cards_for, _over(lambda c: c.cards_for, 1.5)),
-    MarketRule("TEAM_OVER_2_5_CARDS_FOR", "cards", 640, lambda c: c.cards_for, _over(lambda c: c.cards_for, 2.5)),
-    MarketRule("OPPONENT_OVER_1_5_CARDS", "cards", 650, lambda c: c.cards_against, _over(lambda c: c.cards_against, 1.5)),
-    MarketRule("OPPONENT_OVER_2_5_CARDS", "cards", 660, lambda c: c.cards_against, _over(lambda c: c.cards_against, 2.5)),
-    MarketRule("EACH_TEAM_OVER_0_5_CARDS", "cards", 670, lambda c: min(c.cards_for, c.cards_against), lambda c: c.cards_for > 0.5 and c.cards_against > 0.5),
-    MarketRule("EACH_TEAM_OVER_1_5_CARDS", "cards", 680, lambda c: min(c.cards_for, c.cards_against), lambda c: c.cards_for > 1.5 and c.cards_against > 1.5),
-    MarketRule("EACH_TEAM_OVER_2_5_CARDS", "cards", 690, lambda c: min(c.cards_for, c.cards_against), lambda c: c.cards_for > 2.5 and c.cards_against > 2.5),
+    *_cards_market_rules(),
     *_shot_market_rules(),
     MarketRule("MATCH_OVER_20_5_FOULS", "fouls", 800, lambda c: c.total_fouls, _over(lambda c: c.total_fouls, 20.5)),
     MarketRule("TEAM_OVER_10_5_FOULS_COMMITTED", "fouls", 810, lambda c: c.fouls_committed, _over(lambda c: c.fouls_committed, 10.5)),
-    MarketRule("TEAM_OVER_1_5_OFFSIDES_FOR", "offsides", 900, lambda c: c.offsides_for, _over(lambda c: c.offsides_for, 1.5)),
-    MarketRule("MATCH_OVER_2_5_OFFSIDES", "offsides", 910, lambda c: c.total_offsides, _over(lambda c: c.total_offsides, 2.5)),
+    *_offsides_market_rules(),
 )
 
 
@@ -439,18 +525,18 @@ def _context_from_fact(row: dict) -> TeamMatchContext:
         corners_for_2h=_optional_num(row.get("corners_for_2h")),
         corners_against_2h=_optional_num(row.get("corners_against_2h")),
         total_corners_2h=_optional_num(row.get("total_corners_2h")),
-        cards_for=_num(row.get("cards_for")),
-        cards_against=_num(row.get("cards_against")),
-        total_cards=_num(row.get("total_cards")),
+        cards_for=_optional_num(row.get("cards_for")),
+        cards_against=_optional_num(row.get("cards_against")),
+        total_cards=_optional_num(row.get("total_cards")),
         booking_points_for=_num(row.get("booking_points_for")),
         booking_points_against=_num(row.get("booking_points_against")),
         total_booking_points=_num(row.get("total_booking_points")),
         fouls_committed=_num(row.get("fouls_committed")),
         fouls_won=_num(row.get("fouls_won")),
         total_fouls=_num(row.get("total_fouls")),
-        offsides_for=_num(row.get("offsides_for")),
-        offsides_against=_num(row.get("offsides_against")),
-        total_offsides=_num(row.get("total_offsides")),
+        offsides_for=_optional_num(row.get("offsides_for")),
+        offsides_against=_optional_num(row.get("offsides_against")),
+        total_offsides=_optional_num(row.get("total_offsides")),
         total_shots_for=_optional_num(row.get("total_shots_for")),
         total_shots_against=_optional_num(row.get("total_shots_against")),
         shots_on_target_for=_optional_num(row.get("shots_on_target_for")),
@@ -483,17 +569,27 @@ def _longest_streak(rows: list[dict]) -> int:
     return longest
 
 
-def rebuild_team_trend_rollups(repository: StufRepository, team_id: int, league_id: int, season: int) -> None:
+def rebuild_team_trend_rollups(
+    repository: StufRepository,
+    team_id: int,
+    league_id: int,
+    season: int,
+    *,
+    category: str | None = None,
+) -> None:
     fact_rows = repository.get_team_fixture_fact_rows(team_id, league_id, season)
     contexts = [_context_from_fact(row) for row in fact_rows]
     contexts.sort(key=lambda item: item.played_at, reverse=True)
+    rules = tuple(rule for rule in MARKET_RULES if category is None or rule.category == category)
+    if not rules:
+        raise ValueError(f"No trend rules found for category={category}.")
 
     market_results: list[dict] = []
     grouped: dict[tuple[str, str], list[dict]] = {}
 
     for context in contexts:
         for scope_name in ("overall", context.scope):
-            for rule in MARKET_RULES:
+            for rule in rules:
                 if not rule.sample_predicate(context):
                     continue
 
@@ -514,7 +610,7 @@ def rebuild_team_trend_rollups(repository: StufRepository, team_id: int, league_
                 grouped.setdefault((scope_name, rule.key), []).append(row)
 
     season_stats: list[dict] = []
-    for rule in MARKET_RULES:
+    for rule in rules:
         for scope_name in ("overall", "home", "away"):
             group = grouped.get((scope_name, rule.key), [])
             if not group:
@@ -550,8 +646,14 @@ def rebuild_team_trend_rollups(repository: StufRepository, team_id: int, league_
                 }
             )
 
-    repository.replace_team_market_results(team_id, league_id, season, market_results)
-    repository.replace_team_season_market_stats(team_id, league_id, season, season_stats)
+    repository.replace_team_market_results(
+        team_id,
+        league_id,
+        season,
+        market_results,
+        market_keys=tuple(rule.key for rule in rules) if category else None,
+    )
+    repository.replace_team_season_market_stats(team_id, league_id, season, season_stats, category=category)
 
 
 def refresh_trends_for_fixture(repository: StufRepository, fixture_id: int) -> None:
