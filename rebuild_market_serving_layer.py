@@ -22,9 +22,12 @@ LOGGER = configure_logging("stuf.market_serving")
 
 SCOPES = ("overall", "home", "away")
 UPCOMING_STATUSES = ("NS", "TBD")
-NEXT_FIXTURE_WINDOW_DAYS = 6
+NEXT_FIXTURE_WINDOW_DAYS = 14  # Wide enough to cover WC 2026 off-season gaps
 PAGE_SIZE = 1000
-MARKET_CATEGORIES = {"corners", "goals", "shots", "offsides", "cards"}
+MARKET_CATEGORIES = {
+    "btts", "booking_points", "cards", "corners", "fouls",
+    "goals", "half_result", "offsides", "result", "shots",
+}
 OrderSpec = tuple[str, bool] | tuple[tuple[str, bool], ...]
 
 
@@ -43,7 +46,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Regenera Market Serving Layer V1 desde tablas canonicas/analiticas.",
     )
-    parser.add_argument("--category", choices=sorted(MARKET_CATEGORIES), default="corners")
+    parser.add_argument("--category", choices=sorted(MARKET_CATEGORIES) + ["all"], default="all")
     parser.add_argument("--season", type=int, default=2025)
     parser.add_argument("--leagues", help="Lista CSV de league_id, ej: 39,61,78,135,140.")
     parser.add_argument("--market-key", help="Market key puntual a regenerar.")
@@ -456,6 +459,31 @@ def goal_values_for_market(
     return home, away, total
 
 
+def result_values_for_market(
+    market_key: str,
+    fixture: dict[str, Any],
+    facts_by_fixture_team: dict[tuple[int, int], dict[str, Any]],
+) -> tuple[float | None, float | None, float | None]:
+    fixture_id = int(fixture["fixture_id"])
+    home_team_id = int(fixture["home_team_id"])
+    away_team_id = int(fixture["away_team_id"])
+    home_fact = facts_by_fixture_team.get((fixture_id, home_team_id), {})
+    away_fact = facts_by_fixture_team.get((fixture_id, away_team_id), {})
+
+    if market_key.endswith("_2H") or "_2H_" in market_key:
+        home = maybe_float(home_fact.get("goals_for_2h"))
+        away = maybe_float(away_fact.get("goals_for_2h"))
+    elif market_key.endswith("_1H") or "_1H_" in market_key:
+        home = maybe_float(home_fact.get("goals_for_1h"))
+        away = maybe_float(away_fact.get("goals_for_1h"))
+    else:
+        home = maybe_float(fixture.get("home_goals"))
+        away = maybe_float(fixture.get("away_goals"))
+
+    total = None if home is None or away is None else home + away
+    return home, away, total
+
+
 def market_values_for_category(
     category: str,
     market_key: str,
@@ -472,6 +500,10 @@ def market_values_for_category(
         return offside_values_for_market(market_key, fixture)
     if category == "cards":
         return card_values_for_market(market_key, fixture)
+    if category in ("result", "half_result", "btts"):
+        return result_values_for_market(market_key, fixture, facts_by_fixture_team)
+    if category in ("booking_points", "fouls"):
+        return None, None, None
     raise RuntimeError(f"Market Serving Layer no soporta evidencia para category={category}.")
 
 
@@ -487,10 +519,13 @@ def team_values_for_market(
     own_value = home_value if team_id == home_team_id else away_value
     opponent_value = away_value if team_id == home_team_id else home_value
 
-    if category == "offsides" and market_key.endswith("_OFFSIDES_AGAINST"):
+    if category in ("offsides", "goals") and market_key.endswith("_AGAINST"):
         return opponent_value, own_value
 
     if category == "cards" and market_key.endswith("_CARDS_AGAINST"):
+        return opponent_value, own_value
+
+    if category == "booking_points" and market_key.endswith("_BOOKING_POINTS_AGAINST"):
         return opponent_value, own_value
 
     return own_value, opponent_value
@@ -693,12 +728,15 @@ def delete_projection_rows(
     filters: dict[str, Any],
     operation: str,
     *,
+    in_filters: dict[str, list[Any]] | None = None,
     older_than: str | None = None,
 ) -> None:
     def request():
         query = repository.supabase.table(table).delete()
         for key, value in filters.items():
             query = query.eq(key, value)
+        for key, values in (in_filters or {}).items():
+            query = query.in_(key, values)
         if older_than is not None:
             query = query.lt("computed_at", older_than)
         return query
@@ -713,12 +751,17 @@ def replace_projection_rows(
     *,
     filters: dict[str, Any],
     on_conflict: str,
+    market_keys: tuple[str, ...] | None = None,
 ) -> None:
     conflict_columns = tuple(column.strip() for column in on_conflict.split(",") if column.strip())
     rows = dedupe_rows(rows, key_columns=conflict_columns, label=table)
     if not rows:
         delete_projection_rows(repository, table, filters, f"delete empty {table}")
         return
+
+    in_filters: dict[str, list[Any]] = {}
+    if market_keys and "market_key" not in filters:
+        in_filters["market_key"] = list(market_keys)
 
     marker = utcnow().isoformat()
     stamped_rows = [{**row, "computed_at": marker} for row in rows]
@@ -728,7 +771,7 @@ def replace_projection_rows(
         on_conflict,
         f"upsert {table} category={filters.get('category')} league={filters.get('league_id')} season={filters.get('season')}",
     )
-    delete_projection_rows(repository, table, filters, f"cleanup {table}", older_than=marker)
+    delete_projection_rows(repository, table, filters, f"cleanup {table}", in_filters=in_filters or None, older_than=marker)
 
 
 def rebuild_league_category(
@@ -815,12 +858,14 @@ def rebuild_league_category(
         (int(row["fixture_id"]), int(row["team_id"])): row
         for row in fact_rows
     }
-    match_results = select_all(
+    match_results = select_all_in_chunks(
         repository,
         "team_match_market_results",
         "fixture_id,team_id,league_id,season,played_at,scope,market_key,result,numeric_value",
+        in_column="market_key",
+        values=market_keys,
+        chunk_size=12,
         eq={"league_id": league_id, "season": season},
-        in_filters={"market_key": market_keys},
         order=(
             ("played_at", False),
             ("fixture_id", True),
@@ -882,6 +927,7 @@ def rebuild_league_category(
         rankings,
         filters=filters,
         on_conflict="category,market_key,league_id,season,scope,team_id",
+        market_keys=market_keys,
     )
     replace_projection_rows(
         repository,
@@ -889,6 +935,7 @@ def rebuild_league_category(
         profiles,
         filters=filters,
         on_conflict="category,market_key,league_id,season,team_id",
+        market_keys=market_keys,
     )
     replace_projection_rows(
         repository,
@@ -896,6 +943,7 @@ def rebuild_league_category(
         evidence,
         filters=filters,
         on_conflict="category,market_key,league_id,season,team_id,scope,fixture_id",
+        market_keys=market_keys,
     )
     LOGGER.info(
         "Market Serving Layer ready category=%s league=%s season=%s rankings=%s profiles=%s evidence=%s",
@@ -920,15 +968,18 @@ def main() -> None:
     else:
         target_leagues = resolve_target_leagues(args, settings, repository, feature="pipeline", season=args.season)
 
+    categories = sorted(MARKET_CATEGORIES) if args.category == "all" else [args.category]
+
     for league_id in target_leagues:
-        rebuild_league_category(
-            repository,
-            args.category,
-            league_id,
-            args.season,
-            market_key=args.market_key,
-            full_refresh=args.full_refresh,
-        )
+        for category in categories:
+            rebuild_league_category(
+                repository,
+                category,
+                league_id,
+                args.season,
+                market_key=args.market_key,
+                full_refresh=args.full_refresh,
+            )
     LOGGER.info("Market Serving Layer V1 rebuilt category=%s season=%s.", args.category, args.season)
 
 

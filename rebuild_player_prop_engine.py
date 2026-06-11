@@ -54,7 +54,7 @@ LOGGER = configure_logging("stuf.player_prop_engine")
 V1_LEAGUES = (39, 61, 78, 135, 140)
 SCOPES = ("overall", "home", "away")
 UPCOMING_STATUSES = ("NS", "TBD")
-NEXT_FIXTURE_WINDOW_DAYS = 6
+NEXT_FIXTURE_WINDOW_DAYS = 14  # Wide enough to cover WC 2026 off-season gaps
 PAGE_SIZE = 1000
 MIN_MINUTES = 1  # minutes > 0 threshold
 

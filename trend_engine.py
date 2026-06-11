@@ -186,11 +186,11 @@ def _goal_market_rules() -> tuple[MarketRule, ...]:
     rules: list[MarketRule] = []
     order = 200
 
-    for line in (1.5, 2.5, 3.5):
-        key_line = _line_key(line)
-        rules.append(MarketRule(f"MATCH_OVER_{key_line}_GOALS", "goals", order, lambda c: c.total_match_goals, _over(lambda c: c.total_match_goals, line)))
+    for line in (0.5, 1.5, 2.5, 3.5):
+        rules.append(MarketRule(f"MATCH_OVER_{_line_key(line)}_GOALS", "goals", order, lambda c: c.total_match_goals, _over(lambda c: c.total_match_goals, line)))
         order += 1
-        rules.append(MarketRule(f"MATCH_UNDER_{key_line}_GOALS", "goals", order, lambda c: c.total_match_goals, _under(lambda c: c.total_match_goals, line)))
+    for line in (1.5, 2.5, 3.5):
+        rules.append(MarketRule(f"MATCH_UNDER_{_line_key(line)}_GOALS", "goals", order, lambda c: c.total_match_goals, _under(lambda c: c.total_match_goals, line)))
         order += 1
 
     rules.extend((
@@ -209,10 +209,14 @@ def _goal_market_rules() -> tuple[MarketRule, ...]:
     order += 4
 
     for line in (0.5, 1.5, 2.5):
-        key_line = _line_key(line)
-        rules.append(MarketRule(f"TEAM_OVER_{key_line}_GOALS_FOR", "goals", order, lambda c: c.goals_for, _over(lambda c: c.goals_for, line)))
+        rules.append(MarketRule(f"TEAM_OVER_{_line_key(line)}_GOALS_FOR", "goals", order, lambda c: c.goals_for, _over(lambda c: c.goals_for, line)))
         order += 1
-        rules.append(MarketRule(f"TEAM_OVER_{key_line}_GOALS_AGAINST", "goals", order, lambda c: c.goals_against, _over(lambda c: c.goals_against, line)))
+        rules.append(MarketRule(f"TEAM_OVER_{_line_key(line)}_GOALS_AGAINST", "goals", order, lambda c: c.goals_against, _over(lambda c: c.goals_against, line)))
+        order += 1
+    for line in (0.5, 1.5, 2.5):
+        rules.append(MarketRule(f"TEAM_UNDER_{_line_key(line)}_GOALS_FOR", "goals", order, lambda c: c.goals_for, _under(lambda c: c.goals_for, line)))
+        order += 1
+        rules.append(MarketRule(f"TEAM_UNDER_{_line_key(line)}_GOALS_AGAINST", "goals", order, lambda c: c.goals_against, _under(lambda c: c.goals_against, line)))
         order += 1
 
     rules.extend((
@@ -238,14 +242,20 @@ def _goal_market_rules() -> tuple[MarketRule, ...]:
     for line in (0.5, 1.5):
         key_line = _line_key(line)
         rules.extend((
-            MarketRule(f"TEAM_1H_OVER_{key_line}_GOALS_FOR", "goals", order, _team_goals_for_1h, _over(_team_goals_for_1h, line), _has_1h_goals),
-            MarketRule(f"TEAM_1H_OVER_{key_line}_GOALS_AGAINST", "goals", order + 1, _team_goals_against_1h, _over(_team_goals_against_1h, line), _has_1h_goals),
-            MarketRule(f"TEAM_2H_OVER_{key_line}_GOALS_FOR", "goals", order + 2, _team_goals_for_2h, _over(_team_goals_for_2h, line), _has_2h_goals),
-            MarketRule(f"TEAM_2H_OVER_{key_line}_GOALS_AGAINST", "goals", order + 3, _team_goals_against_2h, _over(_team_goals_against_2h, line), _has_2h_goals),
-            MarketRule(f"MATCH_1H_OVER_{key_line}_GOALS", "goals", order + 4, _total_1h_goals, _over(_total_1h_goals, line), _has_1h_goals),
-            MarketRule(f"MATCH_2H_OVER_{key_line}_GOALS", "goals", order + 5, _total_2h_goals, _over(_total_2h_goals, line), _has_2h_goals),
+            MarketRule(f"MATCH_1H_OVER_{key_line}_GOALS", "goals", order, _total_1h_goals, _over(_total_1h_goals, line), _has_1h_goals),
+            MarketRule(f"MATCH_1H_UNDER_{key_line}_GOALS", "goals", order + 1, _total_1h_goals, _under(_total_1h_goals, line), _has_1h_goals),
+            MarketRule(f"MATCH_2H_OVER_{key_line}_GOALS", "goals", order + 2, _total_2h_goals, _over(_total_2h_goals, line), _has_2h_goals),
+            MarketRule(f"MATCH_2H_UNDER_{key_line}_GOALS", "goals", order + 3, _total_2h_goals, _under(_total_2h_goals, line), _has_2h_goals),
+            MarketRule(f"TEAM_1H_OVER_{key_line}_GOALS_FOR", "goals", order + 4, _team_goals_for_1h, _over(_team_goals_for_1h, line), _has_1h_goals),
+            MarketRule(f"TEAM_1H_UNDER_{key_line}_GOALS_FOR", "goals", order + 5, _team_goals_for_1h, _under(_team_goals_for_1h, line), _has_1h_goals),
+            MarketRule(f"TEAM_1H_OVER_{key_line}_GOALS_AGAINST", "goals", order + 6, _team_goals_against_1h, _over(_team_goals_against_1h, line), _has_1h_goals),
+            MarketRule(f"TEAM_1H_UNDER_{key_line}_GOALS_AGAINST", "goals", order + 7, _team_goals_against_1h, _under(_team_goals_against_1h, line), _has_1h_goals),
+            MarketRule(f"TEAM_2H_OVER_{key_line}_GOALS_FOR", "goals", order + 8, _team_goals_for_2h, _over(_team_goals_for_2h, line), _has_2h_goals),
+            MarketRule(f"TEAM_2H_UNDER_{key_line}_GOALS_FOR", "goals", order + 9, _team_goals_for_2h, _under(_team_goals_for_2h, line), _has_2h_goals),
+            MarketRule(f"TEAM_2H_OVER_{key_line}_GOALS_AGAINST", "goals", order + 10, _team_goals_against_2h, _over(_team_goals_against_2h, line), _has_2h_goals),
+            MarketRule(f"TEAM_2H_UNDER_{key_line}_GOALS_AGAINST", "goals", order + 11, _team_goals_against_2h, _under(_team_goals_against_2h, line), _has_2h_goals),
         ))
-        order += 6
+        order += 12
 
     return tuple(rules)
 
@@ -401,6 +411,8 @@ def _cards_market_rules() -> tuple[MarketRule, ...]:
     rules: list[MarketRule] = []
     order = 590
 
+    rules.append(MarketRule("MATCH_OVER_0_5_CARDS", "cards", order, _total_cards, _over(_total_cards, 0.5), _has_total_cards))
+    order += 1
     for line in (1.5, 2.5, 3.5, 4.5, 5.5, 6.5):
         key_line = _line_key(line)
         rules.append(MarketRule(f"MATCH_OVER_{key_line}_CARDS", "cards", order, _total_cards, _over(_total_cards, line), _has_total_cards))
@@ -414,6 +426,12 @@ def _cards_market_rules() -> tuple[MarketRule, ...]:
         order += 1
         rules.append(MarketRule(f"TEAM_OVER_{key_line}_CARDS_AGAINST", "cards", order, _team_cards_against, _over(_team_cards_against, line), _has_team_cards_against))
         order += 1
+    for line in (0.5, 1.5, 2.5):
+        key_line = _line_key(line)
+        rules.append(MarketRule(f"TEAM_UNDER_{key_line}_CARDS_FOR", "cards", order, _team_cards_for, _under(_team_cards_for, line), _has_team_cards_for))
+        order += 1
+        rules.append(MarketRule(f"TEAM_UNDER_{key_line}_CARDS_AGAINST", "cards", order, _team_cards_against, _under(_team_cards_against, line), _has_team_cards_against))
+        order += 1
 
     for line in (0.5, 1.5, 2.5):
         key_line = _line_key(line)
@@ -423,13 +441,63 @@ def _cards_market_rules() -> tuple[MarketRule, ...]:
     return tuple(rules)
 
 
+def _has_1h_result(context: TeamMatchContext) -> bool:
+    return context.goals_for_1h is not None and context.goals_against_1h is not None
+
+
+def _has_2h_result(context: TeamMatchContext) -> bool:
+    return context.goals_for_2h is not None and context.goals_against_2h is not None
+
+
+def _is_1h_win(context: TeamMatchContext) -> bool:
+    return _team_goals_for_1h(context) > _team_goals_against_1h(context)
+
+
+def _is_1h_draw(context: TeamMatchContext) -> bool:
+    return _team_goals_for_1h(context) == _team_goals_against_1h(context)
+
+
+def _is_1h_loss(context: TeamMatchContext) -> bool:
+    return _team_goals_for_1h(context) < _team_goals_against_1h(context)
+
+
+def _is_2h_win(context: TeamMatchContext) -> bool:
+    return _team_goals_for_2h(context) > _team_goals_against_2h(context)
+
+
+def _is_2h_draw(context: TeamMatchContext) -> bool:
+    return _team_goals_for_2h(context) == _team_goals_against_2h(context)
+
+
+def _is_2h_loss(context: TeamMatchContext) -> bool:
+    return _team_goals_for_2h(context) < _team_goals_against_2h(context)
+
+
+def _btts_1h(context: TeamMatchContext) -> bool:
+    return _team_goals_for_1h(context) > 0 and _team_goals_against_1h(context) > 0
+
+
+def _btts_2h(context: TeamMatchContext) -> bool:
+    return _team_goals_for_2h(context) > 0 and _team_goals_against_2h(context) > 0
+
+
 MARKET_RULES: tuple[MarketRule, ...] = (
     MarketRule("WIN", "result", 10, lambda c: c.goals_for - c.goals_against, _is_win),
     MarketRule("DRAW", "result", 20, lambda c: c.goals_for - c.goals_against, _is_draw),
     MarketRule("LOSS", "result", 30, lambda c: c.goals_for - c.goals_against, _is_loss),
     MarketRule("UNBEATEN", "result", 40, lambda c: c.goals_for - c.goals_against, lambda c: not _is_loss(c)),
     MarketRule("WINLESS", "result", 50, lambda c: c.goals_for - c.goals_against, lambda c: not _is_win(c)),
+    MarketRule("WIN_1H", "half_result", 10, lambda c: _team_goals_for_1h(c) - _team_goals_against_1h(c), _is_1h_win, _has_1h_result),
+    MarketRule("DRAW_1H", "half_result", 20, lambda c: _team_goals_for_1h(c) - _team_goals_against_1h(c), _is_1h_draw, _has_1h_result),
+    MarketRule("LOSS_1H", "half_result", 30, lambda c: _team_goals_for_1h(c) - _team_goals_against_1h(c), _is_1h_loss, _has_1h_result),
+    MarketRule("WIN_2H", "half_result", 40, lambda c: _team_goals_for_2h(c) - _team_goals_against_2h(c), _is_2h_win, _has_2h_result),
+    MarketRule("DRAW_2H", "half_result", 50, lambda c: _team_goals_for_2h(c) - _team_goals_against_2h(c), _is_2h_draw, _has_2h_result),
+    MarketRule("LOSS_2H", "half_result", 60, lambda c: _team_goals_for_2h(c) - _team_goals_against_2h(c), _is_2h_loss, _has_2h_result),
     MarketRule("BTTS_YES", "btts", 100, lambda c: min(c.goals_for, c.goals_against), lambda c: c.goals_for > 0 and c.goals_against > 0),
+    MarketRule("BTTS_NO", "btts", 101, lambda c: min(c.goals_for, c.goals_against), lambda c: not (c.goals_for > 0 and c.goals_against > 0)),
+    MarketRule("BTTS_1H", "btts", 102, lambda c: min(_team_goals_for_1h(c), _team_goals_against_1h(c)), _btts_1h, _has_1h_goals),
+    MarketRule("BTTS_2H", "btts", 103, lambda c: min(_team_goals_for_2h(c), _team_goals_against_2h(c)), _btts_2h, _has_2h_goals),
+    MarketRule("BTTS_BOTH_HALVES", "btts", 104, lambda c: min(_team_goals_for_1h(c), _team_goals_against_1h(c), _team_goals_for_2h(c), _team_goals_against_2h(c)), lambda c: _btts_1h(c) and _btts_2h(c), _has_both_half_goals),
     *_goal_market_rules(),
     MarketRule("MATCH_OVER_7_5_CORNERS", "corners", 395, lambda c: c.total_corners, _over(lambda c: c.total_corners, 7.5)),
     MarketRule("MATCH_OVER_8_5_CORNERS", "corners", 400, lambda c: c.total_corners, _over(lambda c: c.total_corners, 8.5)),
@@ -489,6 +557,18 @@ MARKET_RULES: tuple[MarketRule, ...] = (
     MarketRule("EACH_TEAM_OVER_5_BOOKING_POINTS", "booking_points", 565, lambda c: min(c.booking_points_for, c.booking_points_against), lambda c: c.booking_points_for > 5 and c.booking_points_against > 5),
     MarketRule("EACH_TEAM_OVER_15_BOOKING_POINTS", "booking_points", 570, lambda c: min(c.booking_points_for, c.booking_points_against), lambda c: c.booking_points_for > 15 and c.booking_points_against > 15),
     MarketRule("EACH_TEAM_OVER_25_BOOKING_POINTS", "booking_points", 575, lambda c: min(c.booking_points_for, c.booking_points_against), lambda c: c.booking_points_for > 25 and c.booking_points_against > 25),
+    MarketRule("MATCH_UNDER_5_BOOKING_POINTS", "booking_points", 576, lambda c: c.total_booking_points, _under(lambda c: c.total_booking_points, 5)),
+    MarketRule("MATCH_UNDER_15_BOOKING_POINTS", "booking_points", 577, lambda c: c.total_booking_points, _under(lambda c: c.total_booking_points, 15)),
+    MarketRule("MATCH_UNDER_25_BOOKING_POINTS", "booking_points", 578, lambda c: c.total_booking_points, _under(lambda c: c.total_booking_points, 25)),
+    MarketRule("MATCH_UNDER_35_BOOKING_POINTS", "booking_points", 579, lambda c: c.total_booking_points, _under(lambda c: c.total_booking_points, 35)),
+    MarketRule("MATCH_UNDER_45_BOOKING_POINTS", "booking_points", 580, lambda c: c.total_booking_points, _under(lambda c: c.total_booking_points, 45)),
+    MarketRule("MATCH_UNDER_55_BOOKING_POINTS", "booking_points", 581, lambda c: c.total_booking_points, _under(lambda c: c.total_booking_points, 55)),
+    MarketRule("TEAM_UNDER_5_BOOKING_POINTS_FOR", "booking_points", 582, lambda c: c.booking_points_for, _under(lambda c: c.booking_points_for, 5)),
+    MarketRule("TEAM_UNDER_15_BOOKING_POINTS_FOR", "booking_points", 583, lambda c: c.booking_points_for, _under(lambda c: c.booking_points_for, 15)),
+    MarketRule("TEAM_UNDER_25_BOOKING_POINTS_FOR", "booking_points", 584, lambda c: c.booking_points_for, _under(lambda c: c.booking_points_for, 25)),
+    MarketRule("TEAM_UNDER_5_BOOKING_POINTS_AGAINST", "booking_points", 585, lambda c: c.booking_points_against, _under(lambda c: c.booking_points_against, 5)),
+    MarketRule("TEAM_UNDER_15_BOOKING_POINTS_AGAINST", "booking_points", 586, lambda c: c.booking_points_against, _under(lambda c: c.booking_points_against, 15)),
+    MarketRule("TEAM_UNDER_25_BOOKING_POINTS_AGAINST", "booking_points", 587, lambda c: c.booking_points_against, _under(lambda c: c.booking_points_against, 25)),
     *_cards_market_rules(),
     *_shot_market_rules(),
     MarketRule("MATCH_OVER_20_5_FOULS", "fouls", 800, lambda c: c.total_fouls, _over(lambda c: c.total_fouls, 20.5)),

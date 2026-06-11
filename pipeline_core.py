@@ -1136,19 +1136,21 @@ class StufRepository:
         if not fixture.get("id"):
             return
 
+        league_row = {
+            "id": league.get("id"),
+            "name": league.get("name"),
+            "logo_url": league.get("logo"),
+            "country_name": league.get("country"),
+            "country_code": None,
+            "raw_payload": league,
+            "updated_at": utcnow().isoformat(),
+        }
+        normalized_league_type = normalize_league_type(league.get("type"))
+        if normalized_league_type is not None:
+            league_row["type"] = normalized_league_type
+
         self._execute(
-            lambda: self.supabase.table("leagues").upsert(
-                {
-                    "id": league.get("id"),
-                    "name": league.get("name"),
-                    "type": normalize_league_type(league.get("type")),
-                    "logo_url": league.get("logo"),
-                    "country_name": league.get("country"),
-                    "country_code": None,
-                    "raw_payload": league,
-                    "updated_at": utcnow().isoformat(),
-                }
-            ),
+            lambda: self.supabase.table("leagues").upsert(league_row),
             f"upsert fixture shell league fixture={fixture['id']}",
         )
 
@@ -2436,7 +2438,7 @@ class StufRepository:
             return
 
         marker = utcnow().isoformat()
-        stamped_rows = [{**row, "updated_at": marker} for row in rows]
+        stamped_rows = [{**row, "projected_source": row.get("projected_source"), "updated_at": marker} for row in rows]
         self._upsert_rows(
             "player_season_stats",
             stamped_rows,
@@ -2525,7 +2527,7 @@ class StufRepository:
             return
 
         marker = utcnow().isoformat()
-        stamped_rows = [{**row, "updated_at": marker} for row in rows]
+        stamped_rows = [{**row, "projected_source": row.get("projected_source"), "updated_at": marker} for row in rows]
         self._upsert_rows(
             "team_season_market_stats",
             stamped_rows,
@@ -2575,7 +2577,7 @@ class StufRepository:
             return
 
         marker = utcnow().isoformat()
-        stamped_rows = [{**row, "updated_at": marker} for row in rows]
+        stamped_rows = [{**row, "projected_source": row.get("projected_source"), "updated_at": marker} for row in rows]
         self._upsert_rows(
             "team_stat_averages",
             stamped_rows,
