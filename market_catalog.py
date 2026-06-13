@@ -80,11 +80,15 @@ def _goals_market_definitions() -> tuple[dict[str, Any], ...]:
     for period in ("1H", "2H"):
         period_label = "First Half" if period == "1H" else "Second Half"
         period_key = "1H" if period == "1H" else "2H"
+        # Match-level 1H/2H goals use dedicated families so the odds pipeline's
+        # inferred lookup (by_family_op_line) is unambiguous. A shared family would
+        # cause ('goals_by_half','over','0.5') to match both 1H and 2H markets.
+        match_family = f"match_goals_{period.lower()}"
         for line in (0.5, 1.5):
             key_line = _line_key(line)
-            rows.append(_market(f"MATCH_{period_key}_OVER_{key_line}_GOALS", "goals", f"Over {line} {period_label} Match Goals", "match", "goals", "over", line, order, period=period, family="goals_by_half"))
+            rows.append(_market(f"MATCH_{period_key}_OVER_{key_line}_GOALS", "goals", f"Over {line} {period_label} Match Goals", "match", "goals", "over", line, order, period=period, family=match_family))
             order += 1
-            rows.append(_market(f"MATCH_{period_key}_UNDER_{key_line}_GOALS", "goals", f"Under {line} {period_label} Match Goals", "match", "goals", "under", line, order, period=period, family="goals_by_half"))
+            rows.append(_market(f"MATCH_{period_key}_UNDER_{key_line}_GOALS", "goals", f"Under {line} {period_label} Match Goals", "match", "goals", "under", line, order, period=period, family=match_family))
             order += 1
             rows.append(_market(f"TEAM_{period_key}_OVER_{key_line}_GOALS_FOR", "goals", f"Over {line} {period_label} Team Goals For", "team", "goals_for", "over", line, order, period=period, family="goals_by_half"))
             order += 1

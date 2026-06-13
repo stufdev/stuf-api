@@ -328,17 +328,41 @@ def build_projected_average_rows(
     return [{**row, "projected_source": projected_source} for row in rows]
 
 
-def delete_projected_rows(repository: StufRepository, table: str, target_league_id: int, target_season: int) -> None:
-    def request():
-        return (
-            repository.supabase.table(table)
-            .delete()
-            .eq("league_id", target_league_id)
-            .eq("season", target_season)
-            .filter("projected_source", "not.is", "null")
-        )
+def delete_projected_rows(
+    repository: StufRepository,
+    table: str,
+    target_league_id: int,
+    target_season: int,
+    team_ids: tuple[int, ...] = (),
+    chunk_size: int = 10,
+) -> None:
+    """Delete projected rows chunked by team_id to avoid Supabase statement timeout."""
+    if not team_ids:
+        def request():
+            return (
+                repository.supabase.table(table)
+                .delete()
+                .eq("league_id", target_league_id)
+                .eq("season", target_season)
+                .filter("projected_source", "not.is", "null")
+            )
+        repository._execute(request, f"delete projected {table} league={target_league_id} season={target_season}")
+        return
 
-    repository._execute(request, f"delete projected {table} league={target_league_id} season={target_season}")
+    for i in range(0, len(team_ids), chunk_size):
+        chunk = list(team_ids[i : i + chunk_size])
+
+        def request(chunk: list[int] = chunk):
+            return (
+                repository.supabase.table(table)
+                .delete()
+                .eq("league_id", target_league_id)
+                .eq("season", target_season)
+                .in_("team_id", chunk)
+                .filter("projected_source", "not.is", "null")
+            )
+
+        repository._execute(request, f"delete projected {table} league={target_league_id} season={target_season} chunk={chunk}")
 
 
 def main() -> None:
@@ -436,8 +460,8 @@ def main() -> None:
         return
 
     if args.full_refresh:
-        delete_projected_rows(repository, "team_season_market_stats", args.target_league, args.target_season)
-        delete_projected_rows(repository, "team_stat_averages", args.target_league, args.target_season)
+        delete_projected_rows(repository, "team_season_market_stats", args.target_league, args.target_season, eligible_team_ids)
+        delete_projected_rows(repository, "team_stat_averages", args.target_league, args.target_season, eligible_team_ids)
 
     if source_match_results:
         repository._upsert_rows(

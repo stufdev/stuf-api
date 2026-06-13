@@ -58,6 +58,17 @@ NEXT_FIXTURE_WINDOW_DAYS = 14  # Wide enough to cover WC 2026 off-season gaps
 PAGE_SIZE = 1000
 MIN_MINUTES = 1  # minutes > 0 threshold
 
+# World Cup 2026 lives at league_id=1, season=2026 but plays only weeks of games.
+# Its squads' prop evidence (streaks/hit-rates) is spread across qualifiers,
+# continental cups and friendlies under their REAL (league, season). When the
+# rebuild targets league 1 we project those source appearances onto (1, 2026) —
+# the same cross-competition strategy national_team_evidence_sources defines for
+# team evidence. The props tables allow this: their only fixture FK is
+# (fixture_id, team_id) -> fixture_teams, which does NOT pin league/season, so a
+# qualifier appearance can carry a (1, 2026) label while keeping its real fixture_id.
+WC_TARGET_LEAGUE_ID = 1
+NATIONAL_WINDOW_MONTHS = 24  # Mirror rebuild_national_team_player_evidence window
+
 # --full-refresh deletes the whole (league, season) slice across all props.
 # The two large fact tables (~850k rows each) cannot delete all props in one
 # statement without exceeding the DB statement_timeout (Postgres 57014) — the
@@ -582,6 +593,134 @@ def load_player_appearances(
     return appearances
 
 
+def load_national_evidence_sources(
+    repository: StufRepository,
+    target_league_id: int,
+    target_season: int,
+) -> list[tuple[int, int]]:
+    """Distinct (source_league_id, source_season) pairs feeding the WC target."""
+    rows = select_all(
+        repository,
+        "national_team_evidence_sources",
+        "source_league_id,source_season,is_active",
+        eq={"target_league_id": target_league_id, "target_season": target_season, "is_active": True},
+    )
+    return sorted({(int(r["source_league_id"]), int(r["source_season"])) for r in rows})
+
+
+def load_wc_team_ids(
+    repository: StufRepository,
+    target_league_id: int,
+    target_season: int,
+) -> list[int]:
+    """Qualified national teams for the World Cup target (league, season)."""
+    rows = select_all(
+        repository,
+        "team_league_seasons",
+        "team_id",
+        eq={"league_id": target_league_id, "season": target_season, "is_active": True},
+    )
+    return sorted({int(r["team_id"]) for r in rows if r.get("team_id") is not None})
+
+
+def load_national_appearances(
+    repository: StufRepository,
+    target_league_id: int,
+    target_season: int,
+) -> list[PlayerAppearance]:
+    """Project national-team appearances from source competitions onto (target league, season).
+
+    Reads player_fixture_stats for the WC squads under each source (league, season)
+    within the projection window, then RE-LABELS each appearance to the WC target so
+    the unchanged build stages aggregate the full cross-competition history into one
+    (1, 2026) record per player/team. Real fixture_id/team_id/played_at are preserved.
+    """
+    sources = load_national_evidence_sources(repository, target_league_id, target_season)
+    if not sources:
+        LOGGER.warning(
+            "No active national_team_evidence_sources for target=(%s, %s); nothing to project.",
+            target_league_id,
+            target_season,
+        )
+        return []
+
+    wc_team_ids = load_wc_team_ids(repository, target_league_id, target_season)
+    if not wc_team_ids:
+        LOGGER.warning(
+            "No qualified teams in team_league_seasons for target=(%s, %s); nothing to project.",
+            target_league_id,
+            target_season,
+        )
+        return []
+
+    cutoff_iso = (utcnow() - timedelta(days=NATIONAL_WINDOW_MONTHS * 31)).isoformat()
+    LOGGER.info(
+        "National projection: target=(%s, %s) sources=%s teams=%s window_cutoff=%s",
+        target_league_id,
+        target_season,
+        len(sources),
+        len(wc_team_ids),
+        cutoff_iso,
+    )
+
+    columns = (
+        "fixture_id,player_id,team_id,league_id,season,"
+        "minutes,goals,assists,total_shots,shots_on_target,"
+        "yellow_cards,red_cards,fouls_committed,fouls_drawn,"
+        "tackles,offsides,is_home,played_at"
+    )
+
+    appearances: list[PlayerAppearance] = []
+    skipped_minutes = 0
+    for source_league_id, source_season in sources:
+        rows = select_all_in_chunks(
+            repository,
+            "player_fixture_stats",
+            columns,
+            in_column="team_id",
+            values=wc_team_ids,
+            eq={"league_id": source_league_id, "season": source_season},
+            gte={"played_at": cutoff_iso},
+        )
+        for row in rows:
+            minutes = row.get("minutes")
+            if minutes is None or int(minutes) < MIN_MINUTES:
+                skipped_minutes += 1
+                continue
+
+            appearances.append(PlayerAppearance(
+                fixture_id=int(row["fixture_id"]),
+                player_id=int(row["player_id"]),
+                team_id=int(row["team_id"]),
+                opponent_team_id=None,  # enriched below via fixture_teams
+                # RE-LABEL to the WC target so build stages aggregate one record.
+                league_id=target_league_id,
+                season=target_season,
+                played_at=str(row["played_at"]),
+                is_home=bool(row.get("is_home", False)),
+                minutes=int(minutes),
+                goals=int(row.get("goals") or 0),
+                assists=int(row.get("assists") or 0),
+                shots_on_target=int(row.get("shots_on_target") or 0),
+                total_shots=int(row.get("total_shots") or 0),
+                yellow_cards=int(row.get("yellow_cards") or 0),
+                red_cards=int(row.get("red_cards") or 0),
+                fouls_committed=int(row.get("fouls_committed") or 0),
+                fouls_drawn=int(row.get("fouls_drawn") or 0),
+                tackles=int(row.get("tackles") or 0),
+                offsides=int(row.get("offsides") or 0),
+            ))
+
+    LOGGER.info(
+        "Projected %s national appearances onto (%s, %s) (skipped %s with missing/zero minutes).",
+        len(appearances),
+        target_league_id,
+        target_season,
+        skipped_minutes,
+    )
+    return appearances
+
+
 def _appearance_signature(a: PlayerAppearance) -> tuple[Any, ...]:
     """Source-metric fingerprint for a player_fixture_stats appearance.
 
@@ -1101,8 +1240,20 @@ def run(args: argparse.Namespace) -> None:
         LOGGER.info("Seeding player_prop_definitions...")
         prop_repo.upsert_player_prop_definitions(list(PLAYER_PROP_DEFINITIONS))
 
-    # Step 2: Load appearances
-    appearances = load_player_appearances(base_repo, league_ids, season)
+    # Step 2: Load appearances.
+    # World Cup (league 1) has no organic season sample worth ranking — project
+    # the squads' cross-competition history (qualifiers/continental/friendlies)
+    # onto (1, season) so streaks and hit-rates reflect real evidence.
+    national_mode = WC_TARGET_LEAGUE_ID in league_ids
+    if national_mode:
+        if league_ids != (WC_TARGET_LEAGUE_ID,):
+            raise RuntimeError(
+                "World Cup projection (league 1) must run on its own, not mixed with club "
+                f"leagues. Got leagues={league_ids}. Re-run with --leagues 1."
+            )
+        appearances = load_national_appearances(base_repo, WC_TARGET_LEAGUE_ID, season)
+    else:
+        appearances = load_player_appearances(base_repo, league_ids, season)
     if not appearances:
         LOGGER.warning("No qualifying appearances found. Exiting.")
         return

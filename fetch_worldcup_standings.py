@@ -136,6 +136,21 @@ def parse_payload(payload: dict[str, Any], league_id: int, season: int) -> list[
     return parsed
 
 
+def deduplicate_standings(rows: list[ParsedStanding]) -> list[ParsedStanding]:
+    """One row per team_id — named group wins over 'Group Stage' catch-all."""
+    by_team: dict[int, ParsedStanding] = {}
+    for row in rows:
+        existing = by_team.get(row.team_id)
+        if existing is None:
+            by_team[row.team_id] = row
+        else:
+            existing_is_catchall = (existing.group_name or "").strip().lower() == "group stage"
+            incoming_is_catchall = (row.group_name or "").strip().lower() == "group stage"
+            if existing_is_catchall and not incoming_is_catchall:
+                by_team[row.team_id] = row
+    return list(by_team.values())
+
+
 def load_known_team_ids(repository: StufRepository, league_id: int, season: int) -> set[int]:
     rows = select_all(
         repository,
@@ -195,6 +210,7 @@ async def main_async() -> None:
         raise RuntimeError("API-Football standings request failed.")
 
     rows = parse_payload(payload, args.league, args.season)
+    rows = deduplicate_standings(rows)
     known_team_ids = load_known_team_ids(repository, args.league, args.season)
     plan = describe_plan(rows, known_team_ids)
     LOGGER.info("World Cup standings plan: %s apply=%s", plan, args.apply)

@@ -77,8 +77,8 @@ class NormalizerRepository(StufRepository):
             lambda: self.supabase.table("api_bet_to_market_map")
             .select(
                 "id,api_bet_id,api_bet_scope,value_pattern,extract_line_from_match,"
-                "canonical_selection,market_key,target_category,mapping_confidence,"
-                "bookmaker_id,league_id,active"
+                "canonical_selection,market_key,target_category,target_family,"
+                "mapping_confidence,bookmaker_id,league_id,active"
             )
             .eq("active", True),
             "load api_bet_to_market_map",
@@ -88,7 +88,7 @@ class NormalizerRepository(StufRepository):
     def load_market_definitions(self) -> list[dict[str, Any]]:
         response = self._execute(
             lambda: self.supabase.table("market_definitions")
-            .select("key,category,operator,line,subject,is_active"),
+            .select("key,category,family,operator,line,subject,is_active"),
             "load market_definitions",
         )
         return response.data or []
@@ -313,16 +313,21 @@ class NormalizerRepository(StufRepository):
 
 def build_market_def_index(
     market_defs: list[dict[str, Any]],
-) -> tuple[dict[str, dict[str, Any]], dict[tuple, list[str]]]:
+) -> tuple[dict[str, dict[str, Any]], dict[tuple, list[str]], dict[tuple, list[str]]]:
     """
-    Returns two indexes:
-    1. by_key      {market_key: definition_row}
-    2. by_cat_op_line  {(category, operator, line_as_str): [market_key, ...]}
-                   Line is stored as string to avoid float equality issues.
-                   e.g. ("goals", "over", "2.5") → ["MATCH_OVER_2_5_GOALS"]
+    Returns three indexes:
+    1. by_key           {market_key: definition_row}
+    2. by_cat_op_line   {(category, operator, line_as_str): [market_key, ...]}
+                        e.g. ("goals", "over", "2.5") → ["MATCH_OVER_2_5_GOALS"]
+    3. by_family_op_line {(family, operator, line_as_str): [market_key, ...]}
+                        Used when api_bet_to_market_map.target_family is set.
+                        Avoids ambiguity where multiple market families share the
+                        same category at overlapping lines (e.g. match_cards vs
+                        team_cards, both category='cards').
     """
     by_key: dict[str, dict[str, Any]] = {}
     by_cat_op_line: dict[tuple, list[str]] = {}
+    by_family_op_line: dict[tuple, list[str]] = {}
 
     for row in market_defs:
         key = row["key"]
@@ -336,10 +341,14 @@ def build_market_def_index(
             continue
 
         line_str = _normalize_line_str(line_raw)
-        index_key = (cat, op, line_str)
-        by_cat_op_line.setdefault(index_key, []).append(key)
 
-    return by_key, by_cat_op_line
+        by_cat_op_line.setdefault((cat, op, line_str), []).append(key)
+
+        family = row.get("family")
+        if family:
+            by_family_op_line.setdefault((family, op, line_str), []).append(key)
+
+    return by_key, by_cat_op_line, by_family_op_line
 
 
 def build_policy_index(
@@ -404,6 +413,7 @@ def resolve_bet_value(
     bet_map_index: dict[tuple, list[dict[str, Any]]],
     market_def_by_cat_op_line: dict[tuple, list[str]],
     market_def_by_key: dict[str, dict[str, Any]],
+    market_def_by_family_op_line: dict[tuple, list[str]] | None = None,
 ) -> dict[str, Any] | None:
     """
     Attempts to resolve (api_bet_id, bet_value) to a canonical STUF
@@ -411,10 +421,19 @@ def resolve_bet_value(
 
     Returns a dict with resolution fields, or None if no match.
     Callers that receive None should route to fixture_odds_unmapped.
+
+    Resolution priority for inferred (line-extraction) rules:
+      1. Explicit market_key on the rule → direct lookup.
+      2. target_family → by_family_op_line[(family, op, line)] → unambiguous when
+         multiple market families share category at overlapping lines.
+      3. target_category → by_cat_op_line[(category, op, line)] → fails if >1 match.
     """
     rules = bet_map_index.get((api_bet_id, api_bet_scope), [])
     if not rules:
         return None
+
+    if market_def_by_family_op_line is None:
+        market_def_by_family_op_line = {}
 
     for rule in rules:
         pattern = rule["value_pattern"]
@@ -435,7 +454,7 @@ def resolve_bet_value(
 
             line_str = _normalize_line_str(extracted_line)
 
-            # If explicit market_key: use it directly
+            # Priority 1: explicit market_key on the rule
             if rule.get("market_key"):
                 mdef = market_def_by_key.get(rule["market_key"])
                 if not mdef or not mdef.get("is_active"):
@@ -447,7 +466,39 @@ def resolve_bet_value(
                     "mapping_confidence": rule["mapping_confidence"],
                 }
 
-            # Category lookup
+            # Priority 2: family-scoped lookup (avoids category-level ambiguity)
+            if rule.get("target_family"):
+                index_key = (rule["target_family"], rule["canonical_selection"], line_str)
+                matching_keys = market_def_by_family_op_line.get(index_key, [])
+
+                if len(matching_keys) == 1:
+                    mkey = matching_keys[0]
+                    mdef = market_def_by_key.get(mkey)
+                    if not mdef or not mdef.get("is_active"):
+                        return {"_unmapped_reason": "market_key_inactive"}
+                    return {
+                        "market_key": mkey,
+                        "canonical_selection": rule["canonical_selection"],
+                        "line": extracted_line,
+                        "mapping_confidence": rule["mapping_confidence"],
+                    }
+                elif len(matching_keys) > 1:
+                    LOGGER.debug(
+                        "Ambiguous family lookup: family=%s op=%s line=%s "
+                        "candidates=%s bet_id=%s value=%s",
+                        rule["target_family"], rule["canonical_selection"],
+                        line_str, matching_keys, api_bet_id, bet_value,
+                    )
+                    return {"_unmapped_reason": "line_not_in_definitions"}
+                else:
+                    LOGGER.debug(
+                        "No market_key for family=%s op=%s line=%s bet_id=%s value=%s",
+                        rule["target_family"], rule["canonical_selection"],
+                        line_str, api_bet_id, bet_value,
+                    )
+                    return {"_unmapped_reason": "line_not_in_definitions"}
+
+            # Priority 3: category lookup (only safe when no ambiguity at this line)
             if rule.get("target_category"):
                 index_key = (rule["target_category"], rule["canonical_selection"], line_str)
                 matching_keys = market_def_by_cat_op_line.get(index_key, [])
@@ -470,7 +521,6 @@ def resolve_bet_value(
                         rule["target_category"], rule["canonical_selection"],
                         line_str, matching_keys, api_bet_id, bet_value,
                     )
-                    # Ambiguous → unmapped
                     return {"_unmapped_reason": "line_not_in_definitions"}
                 else:
                     LOGGER.debug(
@@ -507,6 +557,7 @@ def normalize_snapshot(
     market_def_by_cat_op_line: dict[tuple, list[str]],
     market_def_by_key: dict[str, dict[str, Any]],
     policy_index: dict[str, dict[str, Any]],
+    market_def_by_family_op_line: dict[tuple, list[str]] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """
     Processes one fixture_odds_snapshots row.
@@ -563,6 +614,7 @@ def normalize_snapshot(
                     bet_map_index=bet_map_index,
                     market_def_by_cat_op_line=market_def_by_cat_op_line,
                     market_def_by_key=market_def_by_key,
+                    market_def_by_family_op_line=market_def_by_family_op_line,
                 )
 
                 if resolution is None:
@@ -979,7 +1031,8 @@ def _operator_to_selection(operator: str) -> str | None:
         "loss": "loss",
         "draw": "draw",
         "btts": "yes",
-        "most": "win",  # best approximation
+        "btts_no": "no",
+        "most": "win",
     }
     return mapping.get(operator)
 
@@ -1090,7 +1143,7 @@ def main() -> None:
     policy_rows = repository.load_market_price_policy()
 
     bet_map_index = build_bet_map_index(bet_map_rows)
-    market_def_by_key, market_def_by_cat_op_line = build_market_def_index(market_def_rows)
+    market_def_by_key, market_def_by_cat_op_line, market_def_by_family_op_line = build_market_def_index(market_def_rows)
     policy_index = build_policy_index(policy_rows)
 
     LOGGER.info(
@@ -1168,6 +1221,7 @@ def main() -> None:
             market_def_by_cat_op_line=market_def_by_cat_op_line,
             market_def_by_key=market_def_by_key,
             policy_index=policy_index,
+            market_def_by_family_op_line=market_def_by_family_op_line,
         )
 
         if not args.dry_run:

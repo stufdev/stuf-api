@@ -484,6 +484,25 @@ def result_values_for_market(
     return home, away, total
 
 
+def fact_values_for_market(
+    market_key: str,
+    fixture: dict[str, Any],
+    facts_by_fixture_team: dict[tuple[int, int], dict[str, Any]],
+    fact_column: str,
+) -> tuple[float | None, float | None, float | None]:
+    fixture_id = int(fixture["fixture_id"])
+    home_team_id = int(fixture["home_team_id"])
+    away_team_id = int(fixture["away_team_id"])
+    home = maybe_float(facts_by_fixture_team.get((fixture_id, home_team_id), {}).get(fact_column))
+    away = maybe_float(facts_by_fixture_team.get((fixture_id, away_team_id), {}).get(fact_column))
+
+    if "EACH_TEAM" in market_key:
+        total_value = None if home is None or away is None else min(home, away)
+    else:
+        total_value = None if home is None or away is None else home + away
+    return home, away, total_value
+
+
 def market_values_for_category(
     category: str,
     market_key: str,
@@ -502,8 +521,10 @@ def market_values_for_category(
         return card_values_for_market(market_key, fixture)
     if category in ("result", "half_result", "btts"):
         return result_values_for_market(market_key, fixture, facts_by_fixture_team)
-    if category in ("booking_points", "fouls"):
-        return None, None, None
+    if category == "booking_points":
+        return fact_values_for_market(market_key, fixture, facts_by_fixture_team, "booking_points_for")
+    if category == "fouls":
+        return fact_values_for_market(market_key, fixture, facts_by_fixture_team, "fouls_committed")
     raise RuntimeError(f"Market Serving Layer no soporta evidencia para category={category}.")
 
 
@@ -849,7 +870,7 @@ def rebuild_league_category(
         (
             "fixture_id,team_id,corners_for_1h,corners_for_2h,goals_for,goals_against,total_match_goals,"
             "goals_for_1h,goals_against_1h,total_1h_goals,goals_for_2h,goals_against_2h,total_2h_goals,"
-            "offsides_for,offsides_against,total_offsides"
+            "offsides_for,offsides_against,total_offsides,booking_points_for,fouls_committed"
         ),
         eq={"league_id": league_id, "season": season},
         order=(("fixture_id", True), ("team_id", True)),
